@@ -1,0 +1,1598 @@
+/**
+ * AURA-OMEGA — Agent Tool Registry
+ *
+ * Real, executable tools the autonomous AURAs can call via OpenRouter native
+ * function-calling. Each tool has a JSON-schema declaration (sent to the model)
+ * and a `run` implementation (executed server-side). Tools return a plain string
+ * that is fed back to the model as the tool result.
+ *
+ * SECURITY: code_exec runs in an isolated subprocess with a hard timeout, an
+ * output cap, and a scrubbed environment (no DATABASE_URL / API keys leak into
+ * user code). When the host supports unprivileged namespaces (detected at
+ * runtime), it is additionally wrapped in `unshare` so the code has NO network
+ * access and CANNOT see the app/repo filesystem (a private tmpfs hides /home).
+ * If namespaces are unavailable, it falls back to a scrubbed-env subprocess.
+ * http_request is outbound-only and truncates response bodies.
+ */
+
+import { spawn, spawnSync } from "node:child_process";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { logger } from "./lib/logger";
+import { db } from "@workspace/db";
+import { agentMemoryTable, vaultSecretsTable, messagesTable, cronJobsTable, attachmentsTable } from "@workspace/db";
+import { desc, ilike, or, isNotNull, eq } from "drizzle-orm";
+import { substituteSecrets, redactSecrets, hasSecretPlaceholder } from "./lib/vault";
+import {
+  PLATFORMS,
+  getPlatform,
+  platformKeys,
+  isPlatformConnected,
+  callPlatformApi,
+} from "./lib/connectors";
+import {
+  tavilySearch,
+  exaSearch,
+  e2bExec,
+  e2bConfigured,
+  composioConfigured,
+  composioExecuteEnabled,
+  composioExecute,
+  composioListConnections,
+} from "./lib/integrations";
+import { embed, embeddingsConfigured, cosineSimilarity, parseEmbedding } from "./lib/embeddings";
+import { pineconeConfigured, pineconeUpsert, pineconeQuery } from "./lib/pinecone";
+import { runInSandbox, repoPr, sandboxConfigured, gitWriteConfigured } from "./lib/sandbox";
+import { TIER1_SOURCES, tier1SourcesText } from "./lib/sources";
+import { marketingPlaybook, MARKETING_SECTIONS } from "./lib/marketing";
+import { computeNextRun } from "./lib/cron";
+import { blockIfSensitiveForPublic } from "./lib/safety";
+import { checkPostAllowed, recordPost } from "./lib/postLimit";
+
+const STEEL_BASE = "https://api.steel.dev/v1";
+const FIRECRAWL_BASE = "https://api.firecrawl.dev/v1";
+
+/**
+ * Absolute, publicly-reachable base URL for serving saved files. Saved artifacts
+ * and generated images MUST be referenced by an absolute https URL so external
+ * services (e.g. Instagram fetching an image_url to publish) can actually fetch
+ * them — a relative "/api/uploads/ID" becomes a broken "https://api.uploads/ID"
+ * when handed to a third-party API. Render injects RENDER_EXTERNAL_URL.
+ */
+function publicBaseUrl(): string {
+  return (
+    process.env["PUBLIC_BASE_URL"] ||
+    process.env["RENDER_EXTERNAL_URL"] ||
+    "https://aura-omega.onrender.com"
+  ).replace(/\/$/, "");
+}
+function uploadUrl(id: number, download = false): string {
+  return `${publicBaseUrl()}/api/uploads/${id}${download ? "?download=1" : ""}`;
+}
+
+// ─── SSRF guard ──────────────────────────────────────────────────────────────
+// http_request makes outbound calls *from the server runtime*, so an unguarded
+// URL lets a model probe internal services or the cloud metadata endpoint. We
+// reject loopback, link-local (incl. 169.254.169.254), and private/reserved
+// ranges, resolving DNS names first so a public name pointing at an internal IP
+// is still blocked.
+
+function ipv4IsPrivate(ip: string): boolean {
+  const parts = ip.split(".").map((p) => parseInt(p, 10));
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) return true;
+  const [a, b] = parts;
+  if (a === 0 || a === 10 || a === 127) return true; // this-network, private, loopback
+  if (a === 169 && b === 254) return true; // link-local + cloud metadata
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  if (a >= 224) return true; // multicast / reserved
+  return false;
+}
+
+function ipIsPrivate(ip: string): boolean {
+  if (ip.includes(":")) {
+    const lower = ip.toLowerCase();
+    if (lower === "::1" || lower === "::") return true; // loopback / unspecified
+    if (lower.startsWith("fe80")) return true; // link-local
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique-local
+    const mapped = lower.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return ipv4IsPrivate(mapped[1]);
+    return false;
+  }
+  return ipv4IsPrivate(ip);
+}
+
+/** Returns an error string if the URL is unsafe to fetch, or null if allowed. */
+export async function ssrfGuard(url: string): Promise<string | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "error: invalid url.";
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "error: only http(s) urls are allowed.";
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".internal") ||
+    host.endsWith(".local")
+  ) {
+    return "error: requests to internal hostnames are blocked.";
+  }
+  if (isIP(host)) {
+    return ipIsPrivate(host) ? "error: requests to private/internal addresses are blocked." : null;
+  }
+  try {
+    const records = await lookup(host, { all: true });
+    if (!records.length) return "error: could not resolve host.";
+    for (const rec of records) {
+      if (ipIsPrivate(rec.address)) {
+        return "error: host resolves to a private/internal address; blocked.";
+      }
+    }
+  } catch {
+    return "error: could not resolve host.";
+  }
+  return null;
+}
+
+export interface ToolContext {
+  agentId: number;
+  agentName: string;
+  agentColor?: string | null;
+  channelId?: number | null;
+}
+
+export interface ToolDef {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  run: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
+}
+
+function clip(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}\n…[truncated ${s.length - n} chars]` : s;
+}
+
+/**
+ * Make a string safe to persist in a Postgres `text` column. Strips NUL bytes
+ * (which Postgres text cannot store) and replaces lone UTF-16 surrogates (which
+ * break UTF-8 encoding) — so binary-ish tool output, e.g. a scraped PDF, can be
+ * written without crashing the insert/update. Valid text and emoji are kept.
+ */
+export function sanitizeForStorage(s: string): string {
+  return s
+    .split(String.fromCharCode(0)).join("")
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, "�") // high surrogate w/o following low
+    .replace(/(^|[^\uD800-\uDBFF])([\uDC00-\uDFFF])/g, "$1�"); // low surrogate w/o preceding high
+}
+
+// ─── Firecrawl web search ────────────────────────────────────────────────────
+
+/** Real web search via Firecrawl. Returns a ranked list of title/url/snippet. */
+async function firecrawlSearch(query: string, limit: number): Promise<string> {
+  const key = process.env["FIRECRAWL_API_KEY"];
+  if (!key) throw new Error("FIRECRAWL_API_KEY is not set");
+  const r = await fetch(`${FIRECRAWL_BASE}/search`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ query, limit }),
+  });
+  if (!r.ok) throw new Error(`Firecrawl ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const data = (await r.json()) as {
+    data?: Array<{ title?: string; description?: string; url?: string }>;
+  };
+  const results = data.data ?? [];
+  if (!results.length) return `no web results for "${query}".`;
+  return `[search provider: firecrawl]\n${results
+    .map((x, i) => `${i + 1}. ${x.title ?? "(untitled)"}\n   ${x.url ?? ""}\n   ${clip((x.description ?? "").trim(), 300)}`)
+    .join("\n\n")}`;
+}
+
+// ─── Multi-provider web search ───────────────────────────────────────────────
+// Tries the configured search providers in order of preference: Tavily (broad,
+// fast) → Exa (neural/semantic) → Firecrawl. Falls through to the next provider
+// on any error so a single provider outage doesn't blind the swarm.
+
+async function webSearch(query: string, limit: number): Promise<string> {
+  const providers: Array<{ name: string; enabled: boolean; run: () => Promise<string> }> = [
+    { name: "tavily", enabled: !!process.env["TAVILY_API_KEY"], run: () => tavilySearch(query, limit) },
+    { name: "exa", enabled: !!process.env["EXA_API_KEY"], run: () => exaSearch(query, limit) },
+    { name: "firecrawl", enabled: !!process.env["FIRECRAWL_API_KEY"], run: () => firecrawlSearch(query, limit) },
+  ].filter((p) => p.enabled);
+
+  if (!providers.length) {
+    return "error: no web search provider is configured (set TAVILY_API_KEY, EXA_API_KEY, or FIRECRAWL_API_KEY).";
+  }
+
+  const errors: string[] = [];
+  for (const provider of providers) {
+    try {
+      return await provider.run();
+    } catch (e) {
+      errors.push(`${provider.name}: ${String(e instanceof Error ? e.message : e).slice(0, 120)}`);
+    }
+  }
+  return `error: all web search providers failed — ${errors.join("; ")}`;
+}
+
+// ─── Shared long-term memory (semantic + keyword) ────────────────────────────
+// Real retrieval over the swarm's shared memory. When an embeddings provider is
+// configured, ranks candidates by cosine similarity against the query vector;
+// otherwise falls back to SQL keyword matching. Always degrades gracefully.
+
+const MEMORY_CANDIDATE_LIMIT = 1000; // newest N embedded rows considered per query
+
+function formatMemoryRow(m: { id: number; agentName: string | null; key: string | null; content: string }, score?: number): string {
+  const tag = score != null ? ` · sim ${score.toFixed(3)}` : "";
+  return `#${m.id} [${m.agentName ?? "?"}${m.key ? ` · ${m.key}` : ""}${tag}] ${clip(m.content, 600)}`;
+}
+
+// Swarm self-audit / architecture / vault-meta entries: prior runs littered the
+// store with these, and surfacing them makes agents "report on themselves"
+// instead of the operator's task. They are never a deliverable, so they are
+// filtered out of every memory_search result.
+const INTERNAL_META_RE =
+  /(vault[-\s]?(full[-\s]?state|state[-\s]?dump|rag|audit|targeted|secret)|swarm[-\s]?architecture|architecture[-\s]?(consolidated|definitions)|memory[-\s]?(audit|store[-\s]?audit)|rag[-\s]?(sweep|requery|response)|system topology|substrate audit|bundle matrix|sentinel|six[_\s]?zips|_directive_|self[-\s]?audit|abby[-\s]?aura[-\s]?memory)/i;
+
+export function isInternalMeta(m: { key?: string | null; content?: string | null; tags?: string | null }): boolean {
+  return INTERNAL_META_RE.test(`${m.key ?? ""} ${m.tags ?? ""} ${m.content ?? ""}`);
+}
+
+async function keywordMemorySearch(query: string, limit: number): Promise<string> {
+  const like = `%${query}%`;
+  const rows = await db
+    .select()
+    .from(agentMemoryTable)
+    .where(or(ilike(agentMemoryTable.content, like), ilike(agentMemoryTable.key, like), ilike(agentMemoryTable.tags, like)))
+    .orderBy(desc(agentMemoryTable.createdAt))
+    .limit(limit * 3);
+  const visible = rows.filter((m) => !isInternalMeta(m)).slice(0, limit);
+  if (!visible.length) return `no relevant memory entries matched "${query}".`;
+  return visible.map((m) => formatMemoryRow(m)).join("\n---\n");
+}
+
+async function memorySearch(query: string, limit: number): Promise<string> {
+  // Primary: Pinecone (managed vector DB) when configured. Falls through to the
+  // Postgres cosine / keyword search below if it's unset, errors, or has no hits.
+  if (pineconeConfigured()) {
+    const queryVec = await embed(query);
+    if (queryVec) {
+      const matches = await pineconeQuery(queryVec, limit * 3);
+      if (matches && matches.length) {
+        const rows = matches
+          .map((m) => {
+            const md = m.metadata ?? {};
+            return {
+              id: Number(md["pgId"] ?? m.id) || 0,
+              agentName: (md["agentName"] as string) ?? null,
+              key: (md["key"] as string) ?? null,
+              content: String(md["content"] ?? ""),
+              score: m.score,
+            };
+          })
+          .filter((r) => !isInternalMeta(r))
+          .slice(0, limit);
+        if (rows.length) return rows.map((r) => formatMemoryRow(r, r.score)).join("\n---\n");
+      }
+    }
+  }
+
+  if (embeddingsConfigured()) {
+    const queryVec = await embed(query);
+    if (queryVec) {
+      const candidates = await db
+        .select()
+        .from(agentMemoryTable)
+        .where(isNotNull(agentMemoryTable.embedding))
+        .orderBy(desc(agentMemoryTable.createdAt))
+        .limit(MEMORY_CANDIDATE_LIMIT);
+
+      const scored = candidates
+        .filter((m) => !isInternalMeta(m))
+        .map((m) => {
+          const vec = parseEmbedding(m.embedding);
+          return vec ? { row: m, score: cosineSimilarity(queryVec, vec) } : null;
+        })
+        .filter((x): x is { row: typeof candidates[number]; score: number } => x !== null)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      if (scored.length) {
+        return scored.map((s) => formatMemoryRow(s.row, s.score)).join("\n---\n");
+      }
+      // Embeddings on but nothing embedded yet (e.g. legacy rows) — fall through.
+    }
+  }
+  return keywordMemorySearch(query, limit);
+}
+
+// ─── Safe arithmetic ─────────────────────────────────────────────────────────
+
+/**
+ * Evaluate a pure arithmetic expression. The input is whitelisted to digits,
+ * decimal points, exponent notation, whitespace, parentheses, and the operators
+ * + - * / % ** — so no identifiers can be referenced and no globals are reachable.
+ */
+function safeCalc(expr: string): string {
+  const cleaned = expr.trim();
+  if (!cleaned) return "error: expression is required.";
+  if (cleaned.length > 500) return "error: expression is too long (max 500 chars).";
+  if (!/^[-+*/%.()0-9eE\s]+$/.test(cleaned)) {
+    return "error: only numbers and the operators + - * / % ** ( ) are allowed.";
+  }
+  try {
+    // No identifiers can survive the whitelist above, so this cannot reference
+    // any variable, global, or function — it only evaluates arithmetic.
+    const fn = new Function(`"use strict"; return (${cleaned});`);
+    const val = fn();
+    if (typeof val !== "number" || !Number.isFinite(val)) {
+      return "error: expression did not evaluate to a finite number.";
+    }
+    return String(val);
+  } catch {
+    return "error: could not evaluate expression.";
+  }
+}
+
+// ─── Steel browser ───────────────────────────────────────────────────────────
+
+/**
+ * A scrape result looks blocked/empty when a bot-wall or near-empty shell came
+ * back instead of real content. Listing sites (cars.com etc.) serve a security
+ * interstitial to datacenter IPs; that's the signal to retry through a proxy.
+ */
+function scrapeLooksBlocked(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 200) return true;
+  return /performing security verification|verify you are (not a |a )?(human|bot)|enable javascript|access denied|captcha|unusual traffic|request blocked|are not a bot/i.test(
+    t,
+  );
+}
+
+/** Single Steel scrape pass (optionally through a residential proxy). */
+async function steelScrapeOnce(url: string, useProxy: boolean): Promise<string> {
+  const key = process.env["STEEL_API_KEY"];
+  if (!key) throw new Error("STEEL_API_KEY is not set");
+  const r = await fetch(`${STEEL_BASE}/scrape`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    // Ask for cleaned markdown, not raw HTML — far more signal per character, so a
+    // single scrape fits the readable content (titles, scores) inside the response
+    // budget instead of being truncated mid-page and forcing extra calls.
+    body: JSON.stringify({ url, format: ["markdown"], useProxy }),
+  });
+  if (!r.ok) throw new Error(`Steel ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const data = (await r.json()) as Record<string, unknown>;
+  const content = data["content"] as Record<string, unknown> | string | undefined;
+  if (typeof content === "string") return content;
+  if (content && typeof content === "object") {
+    return (
+      (content["markdown"] as string) ||
+      (content["text"] as string) ||
+      (content["html"] as string) ||
+      JSON.stringify(content)
+    );
+  }
+  return (data["markdown"] as string) || JSON.stringify(data);
+}
+
+/**
+ * Real Steel scrape. Tries direct first (fast/cheap); if the page comes back as a
+ * bot-wall or empty shell, retries once through Steel's proxy — which defeats the
+ * security interstitials that listing/marketplace sites serve to datacenter IPs.
+ */
+export async function steelScrape(url: string): Promise<string> {
+  const direct = await steelScrapeOnce(url, false);
+  if (!scrapeLooksBlocked(direct)) return direct;
+  try {
+    const viaProxy = await steelScrapeOnce(url, true);
+    // Prefer the proxied result when it actually got through; otherwise keep
+    // whichever has more usable content so we never return less than we had.
+    if (!scrapeLooksBlocked(viaProxy)) return viaProxy;
+    return viaProxy.trim().length > direct.trim().length ? viaProxy : direct;
+  } catch {
+    return direct;
+  }
+}
+
+async function steelScreenshot(url: string): Promise<number> {
+  const key = process.env["STEEL_API_KEY"];
+  if (!key) throw new Error("STEEL_API_KEY is not set");
+  const r = await fetch(`${STEEL_BASE}/screenshot`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ url, fullPage: true }),
+  });
+  if (!r.ok) throw new Error(`Steel ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const buf = await r.arrayBuffer();
+  return buf.byteLength;
+}
+
+// ─── Sandboxed code execution ────────────────────────────────────────────────
+
+const CODE_TIMEOUT_MS = 8000;
+const CODE_OUTPUT_CAP = 4000;
+
+// Detect once whether unprivileged namespace isolation is available on this
+// host. When it is, code_exec is wrapped so executed code has no network and
+// cannot see the app/repo filesystem. Cached after the first probe.
+let sandboxMode: "namespace" | "none" | null = null;
+function detectSandboxMode(): "namespace" | "none" {
+  if (sandboxMode) return sandboxMode;
+  try {
+    // Probe must verify BOTH that unshare works AND that we can mask the repo
+    // by mounting tmpfs over /home inside the namespace. If the mount can't
+    // happen, "namespace" mode would silently leave the repo visible, so we
+    // require the full capability before claiming isolation. The throwaway
+    // namespace is discarded when the probe shell exits.
+    const probe = spawnSync(
+      "unshare",
+      [
+        "--net",
+        "--mount",
+        "--map-root-user",
+        "/bin/sh",
+        "-c",
+        "mount -t tmpfs tmpfs /home && exit 0",
+      ],
+      { timeout: 4000 },
+    );
+    sandboxMode = probe.status === 0 ? "namespace" : "none";
+  } catch {
+    sandboxMode = "none";
+  }
+  if (sandboxMode === "none") {
+    logger.warn(
+      "code_exec: unprivileged namespaces unavailable — running with scrubbed env only (no network/fs isolation). Code execution should be treated as untrusted on this host.",
+    );
+  } else {
+    logger.info("code_exec: namespace isolation active (no network, repo hidden).");
+  }
+  return sandboxMode;
+}
+
+function runSandboxed(language: string, source: string): Promise<string> {
+  return new Promise((resolve) => {
+    const lang = language.toLowerCase();
+    let runtime: string;
+    let filename: string;
+    let runtimeArgs: string[];
+    if (lang === "python" || lang === "py" || lang === "python3") {
+      runtime = "python3";
+      filename = "main.py";
+      runtimeArgs = ["-I", filename];
+    } else if (lang === "javascript" || lang === "js" || lang === "node") {
+      runtime = "node";
+      filename = "main.js";
+      runtimeArgs = [filename];
+    } else {
+      resolve(`error: unsupported language "${language}". Use "python" or "javascript".`);
+      return;
+    }
+
+    // Write source to a private temp dir and execute the FILE (never inline),
+    // so the source can't break out of shell quoting in the namespace wrapper.
+    let dir: string;
+    try {
+      dir = mkdtempSync(join(tmpdir(), "auraexec-"));
+      writeFileSync(join(dir, filename), source, "utf8");
+    } catch (e) {
+      resolve(`error: failed to prepare sandbox: ${String(e).slice(0, 200)}`);
+      return;
+    }
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* best-effort */
+      }
+    };
+
+    const mode = detectSandboxMode();
+    let cmd: string;
+    let args: string[];
+    if (mode === "namespace") {
+      // --net: no network. --mount + tmpfs over /home: the app/repo is invisible.
+      // The values interpolated here are runtime-fixed (our own temp path and
+      // hardcoded runtime), never user input — user code lives in the file.
+      cmd = "unshare";
+      args = [
+        "--net",
+        "--mount",
+        "--map-root-user",
+        "/bin/sh",
+        "-c",
+        // Fail-closed: if the /home mask can't be applied, abort WITHOUT
+        // running the code (otherwise the repo would stay visible). The temp
+        // source dir lives under /tmp, so it survives the tmpfs mount on /home.
+        `mount -t tmpfs tmpfs /home || { echo "sandbox: filesystem isolation failed" >&2; exit 97; }; cd "${dir}" && exec ${runtime} ${runtimeArgs.join(" ")}`,
+      ];
+    } else {
+      cmd = runtime;
+      args = runtimeArgs;
+    }
+
+    // Scrubbed env — user code never sees DATABASE_URL, API keys, secrets.
+    // detached so the whole process group can be killed on timeout/overflow
+    // (killing only the `unshare` parent would orphan the runtime child).
+    const child = spawn(cmd, args, {
+      cwd: dir,
+      env: { PATH: process.env["PATH"] ?? "/usr/bin:/bin", HOME: dir },
+      killSignal: "SIGKILL",
+      detached: true,
+    });
+
+    let killReason: "timeout" | "output-cap" | null = null;
+    const killTree = (reason: "timeout" | "output-cap") => {
+      if (killReason) return;
+      killReason = reason;
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    };
+    const timer = setTimeout(() => killTree("timeout"), CODE_TIMEOUT_MS);
+
+    let stdout = "";
+    let stderr = "";
+    let bytes = 0;
+    const onData = (chunk: Buffer, sink: "out" | "err") => {
+      bytes += chunk.length;
+      if (bytes > CODE_OUTPUT_CAP * 2) {
+        killTree("output-cap");
+        return;
+      }
+      if (sink === "out") stdout += chunk.toString();
+      else stderr += chunk.toString();
+    };
+    child.stdout?.on("data", (c: Buffer) => onData(c, "out"));
+    child.stderr?.on("data", (c: Buffer) => onData(c, "err"));
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(`error: failed to spawn sandbox: ${String(err).slice(0, 200)}`);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      cleanup();
+      const out = clip(stdout.trim(), CODE_OUTPUT_CAP);
+      const errOut = clip(stderr.trim(), CODE_OUTPUT_CAP);
+      if (killReason === "timeout") {
+        resolve(`error: execution killed (timeout ${CODE_TIMEOUT_MS}ms).\nstdout:\n${out}`);
+        return;
+      }
+      if (killReason === "output-cap") {
+        resolve(`error: execution killed (output cap exceeded).\nstdout:\n${out}`);
+        return;
+      }
+      const parts: string[] = [`exit code: ${code ?? 0}`];
+      if (out) parts.push(`stdout:\n${out}`);
+      if (errOut) parts.push(`stderr:\n${errOut}`);
+      if (!out && !errOut) parts.push("(no output)");
+      resolve(parts.join("\n"));
+    });
+  });
+}
+
+// ─── Tool registry ───────────────────────────────────────────────────────────
+
+export const TOOL_REGISTRY: Record<string, ToolDef> = {
+  web_scrape: {
+    name: "web_scrape",
+    description:
+      "Fetch and extract the readable text/markdown content of a live web page by URL. Use to read articles, docs, competitor pages, or any public webpage. " +
+      "Do NOT use it for github.com pages (search results, repos) — those are JavaScript-rendered and return no useful content; use http_request against the GitHub API (https://api.github.com/...) instead, which is auto-authenticated.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Absolute http(s) URL of the page to read." },
+      },
+      required: ["url"],
+    },
+    run: async (args) => {
+      const url = String(args["url"] ?? "").trim();
+      if (!/^https?:\/\//i.test(url)) return "error: a valid absolute http(s) url is required.";
+      // Steer agents away from scraping JS-rendered GitHub web pages (which return
+      // only an empty HTML shell and waste a browser call). The REST API works and
+      // is auto-authenticated by http_request.
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        if (host === "github.com" || host === "www.github.com") {
+          const m = url.match(/github\.com\/search\?(.*)$/i);
+          const apiHint = m
+            ? `https://api.github.com/search/repositories?${m[1].replace(/type=repositories&?/i, "")}`
+            : "https://api.github.com/repos/<owner>/<repo>  (or /search/repositories?q=...)";
+          return `error: github.com web pages are JavaScript-rendered and not scrapable. Use http_request (GET) against the GitHub REST API instead — it is auto-authenticated. Try: ${apiHint}`;
+        }
+      } catch { /* ignore; validated above */ }
+      const content = await steelScrape(url);
+      return clip(content, 8000);
+    },
+  },
+
+  web_screenshot: {
+    name: "web_screenshot",
+    description:
+      "Capture a full-page screenshot of a URL via the Steel browser. Returns a confirmation with the image size in bytes.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "Absolute http(s) URL to screenshot." },
+      },
+      required: ["url"],
+    },
+    run: async (args) => {
+      const url = String(args["url"] ?? "").trim();
+      if (!/^https?:\/\//i.test(url)) return "error: a valid absolute http(s) url is required.";
+      const bytes = await steelScreenshot(url);
+      // A near-empty buffer means the capture failed (blocked page, timeout, or a
+      // non-image error body) — report that honestly instead of "0 KB captured".
+      if (bytes < 1024) {
+        return `error: screenshot returned no usable image (${bytes} bytes) for ${url} — the page likely blocked the capture or timed out.`;
+      }
+      return `screenshot captured for ${url} (${Math.round(bytes / 1024)} KB).`;
+    },
+  },
+
+  web_search: {
+    name: "web_search",
+    description:
+      "Search the live web and return the top results (title, URL, snippet). Backed by Tavily, Exa, and Firecrawl with automatic failover. Use to discover current information and find pages worth reading. To read a result's full content, follow up with web_scrape on its URL.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query." },
+        limit: { type: "integer", description: "How many results to return (1-10, default 5).", minimum: 1, maximum: 10 },
+      },
+      required: ["query"],
+    },
+    run: async (args) => {
+      const query = String(args["query"] ?? "").trim();
+      if (!query) return "error: query is required.";
+      let limit = Number(args["limit"] ?? 5);
+      if (!Number.isFinite(limit)) limit = 5;
+      limit = Math.max(1, Math.min(10, Math.floor(limit)));
+      return webSearch(query, limit);
+    },
+  },
+
+  http_request: {
+    name: "http_request",
+    description:
+      "Make a real outbound HTTP request to any API endpoint. Supports GET/POST/PUT/PATCH/DELETE with optional headers and a JSON/text body. Returns the status and response body (truncated). " +
+      "To authenticate ANY private/authenticated API (Render, GitHub, OpenAI, etc.), put a vault secret placeholder in the header rather than a raw key — e.g. headers { \"Authorization\": \"Bearer {{secret:RENDER_API_KEY}}\" } or for GitHub { \"Authorization\": \"Bearer {{secret:GITHUB_API_KEY}}\" }. " +
+      "The placeholder is resolved to the real value only at send time, so the secret never enters your context — the vault is write-only BY DESIGN and you never need the raw key. Use vault_list (or the STORED SECRETS list in your prompt) to see which names exist; if a name is there the credential is available — never report it missing, just use {{secret:NAME}} and make the call. Authenticating GitHub this way also raises its limit from 60 to 5,000 requests/hour.",
+    parameters: {
+      type: "object",
+      properties: {
+        method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"], description: "HTTP method." },
+        url: { type: "string", description: "Absolute http(s) URL." },
+        headers: { type: "object", description: "Optional request headers as a flat key/value object." },
+        body: { type: "string", description: "Optional request body (send JSON as a string)." },
+      },
+      required: ["method", "url"],
+    },
+    run: async (args) => {
+      // Resolve {{secret:NAME}} placeholders to real values ONLY here, at the
+      // moment of the outbound fetch. The model-supplied args (stored verbatim in
+      // tool-call telemetry) keep the placeholder, so the raw secret never enters
+      // the model context, the message log, or the telemetry record. Every value
+      // we inject is collected in `usedSecrets` so we can strip it back out of the
+      // response in case the endpoint reflects request data (echo/debug/error).
+      const usedSecrets = new Set<string>();
+      const url = (await substituteSecrets(String(args["url"] ?? ""), usedSecrets)).trim();
+      if (!/^https?:\/\//i.test(url)) return "error: a valid absolute http(s) url is required.";
+      const blocked = await ssrfGuard(url);
+      if (blocked) return blocked;
+      const method = String(args["method"] ?? "GET").toUpperCase();
+      const headers: Record<string, string> = {};
+      const rawHeaders = args["headers"];
+      if (rawHeaders && typeof rawHeaders === "object") {
+        for (const [k, v] of Object.entries(rawHeaders as Record<string, unknown>)) {
+          headers[k] = await substituteSecrets(String(v), usedSecrets);
+        }
+      }
+      const body =
+        args["body"] != null && method !== "GET" && method !== "DELETE"
+          ? await substituteSecrets(String(args["body"]), usedSecrets)
+          : undefined;
+
+      // If a {{secret:NAME}} placeholder did NOT resolve, the exact name isn't in
+      // the vault. Fail loudly here instead of firing a request that sends the
+      // literal "{{secret:...}}" string as a credential (a guaranteed 401) and
+      // then mis-reporting the key as invalid/missing.
+      if (hasSecretPlaceholder(url) || Object.values(headers).some(hasSecretPlaceholder) || (body != null && hasSecretPlaceholder(body))) {
+        return "error: a {{secret:NAME}} placeholder did not resolve — that exact secret name is not in the vault. Call vault_list to get the correct names, then retry. (No request was sent.)";
+      }
+
+      // Auto-authenticate the APIs the swarm calls constantly. Agents repeatedly
+      // send these with NO Authorization header (e.g. headers={}) and then read
+      // the resulting 401 as "the key is invalid / the service isn't connected" —
+      // when in fact they simply never attached the credential. When the vault has
+      // the token (loaded into env at boot) and the agent didn't set Authorization,
+      // attach it. The token never enters the model context and is redacted from
+      // any echoed response.
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        const lc = Object.keys(headers).map((k) => k.toLowerCase());
+        if (host === "api.github.com" || host.endsWith(".githubusercontent.com")) {
+          const ghToken = process.env["GITHUB_API_KEY"] || process.env["GITHUB_TOKEN"] || process.env["SANDBOX_GITHUB_TOKEN"];
+          if (ghToken && !lc.includes("authorization")) {
+            headers["Authorization"] = `Bearer ${ghToken}`;
+            usedSecrets.add(ghToken);
+          }
+          if (!lc.includes("user-agent")) headers["User-Agent"] = "AURA-OMEGA-Omega";
+          if (host === "api.github.com" && !lc.includes("accept")) headers["Accept"] = "application/vnd.github+json";
+        } else if (host === "api.render.com") {
+          const rnToken = process.env["RENDER_API_KEY"];
+          if (rnToken && !lc.includes("authorization")) {
+            headers["Authorization"] = `Bearer ${rnToken}`;
+            usedSecrets.add(rnToken);
+          }
+          if (!lc.includes("accept")) headers["Accept"] = "application/json";
+        }
+      } catch { /* url already validated above; ignore */ }
+      const authSent = Object.keys(headers).some((k) => k.toLowerCase() === "authorization");
+
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 15000);
+      try {
+        // Follow redirects manually so every hop is re-checked by ssrfGuard — a
+        // public/open-redirect URL must not be able to bounce us onto an
+        // internal target.
+        let currentUrl = url;
+        let r: Response | null = null;
+        for (let hop = 0; hop < 5; hop++) {
+          r = await fetch(currentUrl, { method, headers, body, signal: ctrl.signal, redirect: "manual" });
+          if (r.status < 300 || r.status >= 400) break;
+          const location = r.headers.get("location");
+          if (!location) break;
+          const next = new URL(location, currentUrl).toString();
+          if (!/^https?:\/\//i.test(next)) return "error: redirect to a non-http(s) target was blocked.";
+          const redirectBlocked = await ssrfGuard(next);
+          if (redirectBlocked) return `error: redirect blocked — ${redirectBlocked.replace(/^error: /, "")}`;
+          currentUrl = next;
+          if (hop === 4) return "error: too many redirects.";
+        }
+        if (!r) return "error: request failed: no response.";
+        const text = await r.text();
+        // Strip any injected secret values that the endpoint may have echoed
+        // back before this result is stored or fed to the model.
+        const safe = redactSecrets(text, usedSecrets);
+        // A 401/403 on a request we sent with NO Authorization header is a
+        // missing-credential mistake, not proof the key is bad. Tell the agent so
+        // it retries with the placeholder instead of declaring the service dead.
+        const hint =
+          (r.status === 401 || r.status === 403) && !authSent
+            ? `\n\n[hint: this request was sent with NO Authorization header — that is why it was rejected. This is NOT evidence the credential is missing or invalid. Retry with headers {"Authorization":"Bearer {{secret:NAME}}"} using the correct vault name (see vault_list / your STORED SECRETS list).]`
+            : "";
+        return `HTTP ${r.status} ${r.statusText}\n${clip(safe, 4000)}${hint}`;
+      } catch (e) {
+        return redactSecrets(`error: request failed: ${String(e).slice(0, 200)}`, usedSecrets);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  },
+
+  code_exec: {
+    name: "code_exec",
+    description:
+      "Execute a short code snippet in an isolated subprocess and return its stdout/stderr. Supports 'python' and 'javascript'. Hard 8s timeout. Secrets, env vars, and the database are never exposed. Where the host supports unprivileged namespaces, execution also has NO network access and CANNOT see the app/repo filesystem; on hosts without that support it falls back to a scrubbed-env subprocess with network/filesystem still reachable. Use for self-contained calculations, data transforms, and quick logic checks — not for fetching URLs (use http_request) or reading project files.",
+    parameters: {
+      type: "object",
+      properties: {
+        language: { type: "string", enum: ["python", "javascript"], description: "Runtime to use." },
+        source: { type: "string", description: "Self-contained source code. Print results to stdout." },
+      },
+      required: ["language", "source"],
+    },
+    run: async (args) => {
+      const language = String(args["language"] ?? "");
+      const source = String(args["source"] ?? "");
+      if (!source.trim()) return "error: source is required.";
+      return runSandboxed(language, source);
+    },
+  },
+
+  cloud_code_exec: {
+    name: "cloud_code_exec",
+    description:
+      "Execute code in a fully isolated E2B cloud sandbox (a real remote VM with network access and a full runtime). Supports 'python' and 'javascript'. Use this instead of code_exec when the code needs network access, pip/npm packages, or stronger isolation than the local sandbox. Returns stdout/stderr/result.",
+    parameters: {
+      type: "object",
+      properties: {
+        language: { type: "string", enum: ["python", "javascript"], description: "Runtime to use." },
+        source: { type: "string", description: "Self-contained source code. Print results to stdout." },
+      },
+      required: ["language", "source"],
+    },
+    run: async (args) => {
+      const language = String(args["language"] ?? "");
+      const source = String(args["source"] ?? "");
+      if (!source.trim()) return "error: source is required.";
+      if (!e2bConfigured()) {
+        return "error: E2B cloud sandbox is not configured (set E2B_API_KEY). Use code_exec for local execution instead.";
+      }
+      return e2bExec(language, source);
+    },
+  },
+
+  sandbox_exec: {
+    name: "sandbox_exec",
+    description:
+      "Run a shell script inside a fresh, isolated E2B cloud VM (its own real computer — node, git, network, full Linux). Use for anything that needs a real dev environment: clone a public repo, install packages, run a build/test suite, run scripts, curl APIs, etc. " +
+      "It is also your INTERACTIVE-AUTOMATION substrate: pip/npm-install and drive real tools here — e.g. Playwright (`pip install playwright && playwright install chromium`) to navigate multi-step web forms, fill fields, click, and submit; or reportlab/fpdf2/fillpdf/pypdf to generate and fill official PDF forms (e.g. AcroForm fields). Print results/paths to stdout and read back any output. " +
+      "STATELESS: each call is a clean disposable VM and files do NOT persist between calls — generate a file, base64 it, and print it ALL in ONE script (then pass to save_artifact); never write in one call and read in the next. NO access to the AURA-OMEGA server or its secrets. For making changes to the AURA-OMEGA repo and opening a PR, use sandbox_repo_pr instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        script: { type: "string", description: "A bash script to run in the VM (commands can be chained with && and newlines)." },
+      },
+      required: ["script"],
+    },
+    run: async (args) => {
+      const script = String(args["script"] ?? "").trim();
+      if (!script) return "error: script is required.";
+      if (!sandboxConfigured()) return "error: E2B cloud sandbox is not configured (E2B_API_KEY).";
+      return runInSandbox(script);
+    },
+  },
+
+  sandbox_repo_pr: {
+    name: "sandbox_repo_pr",
+    description:
+      "Work on the AURA-OMEGA (aura-omega) repository for real: clones it into an isolated E2B VM, runs your shell script to make changes and/or run the test suite (cwd = repo root), commits, pushes a branch, and opens a Pull Request for human review. Use this to implement a fix/feature, run the real tests against your changes, and propose them. Scoped to the aura-omega repo only. The GitHub token is handled server-side and never exposed to you.",
+    parameters: {
+      type: "object",
+      properties: {
+        branch: { type: "string", description: "New branch name, e.g. 'agent/fix-typo'." },
+        script: { type: "string", description: "Bash script run inside the cloned repo to make changes (e.g. edit files with sed/tee) and optionally run tests. cwd is the repo root." },
+        title: { type: "string", description: "PR title (also used as the commit message)." },
+        body: { type: "string", description: "Optional PR description." },
+        baseBranch: { type: "string", description: "Base branch for the PR (default 'main')." },
+      },
+      required: ["branch", "script", "title"],
+    },
+    run: async (args) => {
+      const branch = String(args["branch"] ?? "").trim();
+      const script = String(args["script"] ?? "").trim();
+      const title = String(args["title"] ?? "").trim();
+      if (!branch || !script || !title) return "error: branch, script, and title are required.";
+      if (!sandboxConfigured()) return "error: E2B cloud sandbox is not configured (E2B_API_KEY).";
+      if (!gitWriteConfigured()) return "error: git push is not enabled — the operator must set SANDBOX_GITHUB_TOKEN.";
+      return repoPr({
+        branch,
+        script,
+        title,
+        body: args["body"] != null ? String(args["body"]) : undefined,
+        baseBranch: args["baseBranch"] != null ? String(args["baseBranch"]) : undefined,
+      });
+    },
+  },
+
+  memory_write: {
+    name: "memory_write",
+    description:
+      "Persist a fact, finding, or result to the swarm's shared long-term memory so any agent can retrieve it later.",
+    parameters: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The information to store." },
+        key: { type: "string", description: "Optional short label/topic for the memory." },
+        tags: { type: "string", description: "Optional comma-separated tags." },
+      },
+      required: ["content"],
+    },
+    run: async (args, ctx) => {
+      const content = String(args["content"] ?? "").trim();
+      if (!content) return "error: content is required.";
+      const key = args["key"] != null ? String(args["key"]).slice(0, 200) : null;
+      const stored = content.slice(0, 8000);
+      // Embed the content (key + content) for semantic retrieval. Best-effort:
+      // if embeddings aren't configured or fail, we store null and search falls
+      // back to keyword matching.
+      const vector = await embed(key ? `${key}\n${stored}` : stored);
+      const tags = args["tags"] != null ? String(args["tags"]).slice(0, 300) : null;
+      const [row] = await db
+        .insert(agentMemoryTable)
+        .values({
+          agentId: ctx.agentId,
+          agentName: ctx.agentName,
+          key,
+          content: stored,
+          tags,
+          embedding: vector ? JSON.stringify(vector) : null,
+        })
+        .returning();
+
+      // Postgres is the durable record + fallback. When Pinecone is configured,
+      // also upsert the vector there as the primary semantic index (best-effort).
+      let pineconed = false;
+      if (vector && row?.id != null && pineconeConfigured()) {
+        pineconed = await pineconeUpsert(String(row.id), vector, {
+          pgId: row.id,
+          agentName: ctx.agentName ?? null,
+          key,
+          tags,
+          content: stored.slice(0, 1500),
+        });
+      }
+      return `stored memory #${row?.id ?? "?"}${vector ? (pineconed ? " (semantic · pinecone)" : " (semantic)") : ""}.`;
+    },
+  },
+
+  memory_search: {
+    name: "memory_search",
+    description:
+      "Search the swarm's shared long-term memory for prior TASK-RELEVANT facts about the operator's domain (e.g. earlier findings, figures, sources for this project). Semantic vector similarity when embeddings are configured, else keyword. " +
+      "Do NOT use this to research the swarm itself (its architecture, roles, vault, prior audits) — that is internal state, not a deliverable. If results are only internal/meta/self-audit entries, ignore them and gather the real answer from web_search/web_scrape/http_request. Call it at most a couple of times; don't loop.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "What to retrieve from stored memory (natural language or keywords)." },
+      },
+      required: ["query"],
+    },
+    run: async (args) => {
+      const query = String(args["query"] ?? "").trim();
+      if (!query) return "error: query is required.";
+      return memorySearch(query, 5);
+    },
+  },
+
+  calculator: {
+    name: "calculator",
+    description:
+      "Evaluate an arithmetic expression precisely and return the numeric result. Supports + - * / % ** and parentheses. Use this instead of doing mental math for any non-trivial calculation.",
+    parameters: {
+      type: "object",
+      properties: {
+        expression: { type: "string", description: "Arithmetic expression, e.g. '(1234 * 19) / 7 + 2**8'." },
+      },
+      required: ["expression"],
+    },
+    run: async (args) => safeCalc(String(args["expression"] ?? "")),
+  },
+
+  marketing_playbook: {
+    name: "marketing_playbook",
+    description:
+      "Return the Marketing Engine — the universal plug-and-play post→conversion playbook (ANY niche/offer/platform). Call with NO args BEFORE writing any marketing content for the core engine: hook→problem→insight→value→CTA→follow-up, one goal + one CTA keyword, platform-tuned, accuracy-first (research & cite every claim — never fabricate stats/studies/testimonials). Pass a `section` for the enterprise build (campaign_brief, offer_ladder, audience, post_templates, campaign_types, lead_magnets, dm_flow, landing_page, email_nurture, paid_media, channels, production, governance, qa, kpis, experiments, rollout). Execute with image_generate → instagram_post/composio_action → schedule_task → memory_write.",
+    parameters: {
+      type: "object",
+      properties: {
+        section: {
+          type: "string",
+          enum: Object.keys(MARKETING_SECTIONS),
+          description: "Optional deep module to return instead of the core engine.",
+        },
+      },
+    },
+    run: async (args) => marketingPlaybook(args["section"] != null ? String(args["section"]) : undefined),
+  },
+
+  tier1_sources: {
+    name: "tier1_sources",
+    description:
+      "Return the vetted Tier-1 (authoritative, primary) source URLs to research from — government/regulatory, primary institutions, peer-reviewed journals & standards bodies, official company/platform docs, Tier-1 wire services, and recognized data authorities. Call this BEFORE web research so you start from serious sources, then web_scrape/http_request those URLs. Optionally pass a category to filter.",
+    parameters: {
+      type: "object",
+      properties: {
+        category: {
+          type: "string",
+          enum: TIER1_SOURCES.map((c) => c.key),
+          description: "Optional domain filter: medicine, finance, markets, news, ai, marketing, engineering, law, social, gov.",
+        },
+      },
+    },
+    run: async (args) => {
+      const category = args["category"] != null ? String(args["category"]) : undefined;
+      return tier1SourcesText(category);
+    },
+  },
+
+  save_artifact: {
+    name: "save_artifact",
+    description:
+      "Save a file you created so the OPERATOR can DOWNLOAD it. Returns a real download URL — use this for any deliverable file (report, CSV, markdown, code, JSON, or a PDF). After saving, you MUST include the returned markdown download link in your final answer so the operator can click it. " +
+      "For text deliverables pass the text in `content` (encoding 'utf8'). For a binary file you generated in sandbox_exec/code_exec (e.g. a PDF), base64-encode it there (`base64 -w0 file.pdf`), print it, then pass that string as `content` with encoding 'base64'. Never claim a file exists without saving it here first.",
+    parameters: {
+      type: "object",
+      properties: {
+        filename: { type: "string", description: "File name with extension, e.g. 'fl-llc-articles.pdf' or 'market-research.md'." },
+        content: { type: "string", description: "The file content: UTF-8 text, or base64 bytes when encoding='base64'." },
+        mime: { type: "string", description: "Optional MIME type, e.g. 'application/pdf', 'text/markdown', 'text/csv'. Inferred from the extension if omitted." },
+        encoding: { type: "string", enum: ["utf8", "base64"], description: "How `content` is encoded (default 'utf8')." },
+      },
+      required: ["filename", "content"],
+    },
+    run: async (args) => {
+      const filename = String(args["filename"] ?? "").trim().slice(0, 255) || "artifact";
+      const raw = String(args["content"] ?? "");
+      if (!raw) return "error: content is required.";
+      const encoding = String(args["encoding"] ?? "utf8").toLowerCase() === "base64" ? "base64" : "utf8";
+      // Normalize to base64 for storage (the attachments column stores base64).
+      let base64: string;
+      let bytes: number;
+      try {
+        const buf = encoding === "base64"
+          ? Buffer.from(raw.includes(",") ? raw.slice(raw.indexOf(",") + 1) : raw, "base64")
+          : Buffer.from(raw, "utf8");
+        bytes = buf.length;
+        if (bytes === 0) return "error: content decoded to 0 bytes.";
+        if (bytes > 20 * 1024 * 1024) return "error: file too large (max 20 MB).";
+        base64 = buf.toString("base64");
+      } catch (e) {
+        return `error: could not decode content: ${String(e).slice(0, 200)}`;
+      }
+      const ext = filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+      const MIME: Record<string, string> = {
+        pdf: "application/pdf", md: "text/markdown", markdown: "text/markdown", txt: "text/plain",
+        csv: "text/csv", json: "application/json", html: "text/html", xml: "application/xml",
+        js: "text/javascript", ts: "text/plain", py: "text/plain", png: "image/png", jpg: "image/jpeg",
+        jpeg: "image/jpeg", svg: "image/svg+xml", zip: "application/zip", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      };
+      const mimeType = (args["mime"] != null ? String(args["mime"]) : (MIME[ext] ?? "application/octet-stream")).slice(0, 128);
+      const kind = /^image\//.test(mimeType) ? "image" : (/^text\/|json|xml|javascript/.test(mimeType) ? "text" : "other");
+      try {
+        const [row] = await db
+          .insert(attachmentsTable)
+          .values({ filename, mimeType, kind, sizeBytes: bytes, data: base64, extractedText: null })
+          .returning();
+        const url = uploadUrl(row.id, true);
+        return `saved "${filename}" (${bytes} bytes, ${mimeType}). Operator download link — INCLUDE THIS in your final answer:\n[Download ${filename}](${url})`;
+      } catch (e) {
+        return `error: could not save artifact: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
+      }
+    },
+  },
+
+  image_generate: {
+    name: "image_generate",
+    description:
+      "Generate an IMAGE from a text prompt and save it as a downloadable file; returns a markdown image preview plus a download link. Use whenever the operator asks for an image, picture, logo, illustration, diagram, icon, mockup, poster, or banner. Needs OPENAI_API_KEY (or IMAGE_API_KEY).",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "What to draw — describe the image in detail." },
+        size: { type: "string", enum: ["1024x1024", "1536x1024", "1024x1536"], description: "Image size (default 1024x1024)." },
+        filename: { type: "string", description: "Optional output filename, e.g. 'logo.png'." },
+      },
+      required: ["prompt"],
+    },
+    run: async (args) => {
+      const apiKey = process.env["OPENAI_API_KEY"] || process.env["IMAGE_API_KEY"];
+      if (!apiKey) return "error: image generation is not configured (set OPENAI_API_KEY).";
+      const prompt = String(args["prompt"] ?? "").trim();
+      if (!prompt) return "error: prompt is required.";
+      const allowed = new Set(["1024x1024", "1536x1024", "1024x1536"]);
+      const size = allowed.has(String(args["size"])) ? String(args["size"]) : "1024x1024";
+      const base = (process.env["IMAGE_BASE_URL"] ?? "https://api.openai.com/v1").replace(/\/$/, "");
+      const model = process.env["IMAGE_MODEL"] ?? "gpt-image-1";
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 90000);
+      try {
+        const r = await fetch(`${base}/images/generations`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, prompt, size, n: 1 }),
+          signal: ctrl.signal,
+        });
+        const data = (await r.json()) as { data?: Array<{ b64_json?: string; url?: string }>; error?: { message?: string } };
+        if (!r.ok) return `error: image API ${r.status}: ${data?.error?.message ?? "request failed"}`;
+        let b64 = data.data?.[0]?.b64_json ?? "";
+        if (!b64 && data.data?.[0]?.url) {
+          const img = await fetch(data.data[0].url);
+          b64 = Buffer.from(await img.arrayBuffer()).toString("base64");
+        }
+        if (!b64) return "error: image API returned no image data.";
+        const buf = Buffer.from(b64, "base64");
+        const filename = (args["filename"] != null ? String(args["filename"]) : prompt.slice(0, 40).replace(/[^a-z0-9]+/gi, "_")).replace(/\.(png|jpg|jpeg)$/i, "") + ".png";
+        const [row] = await db
+          .insert(attachmentsTable)
+          .values({ filename, mimeType: "image/png", kind: "image", sizeBytes: buf.length, data: b64, extractedText: null })
+          .returning();
+        const url = uploadUrl(row.id);
+        return `generated image "${filename}" (${buf.length} bytes). Its PUBLIC image URL (use this directly as image_url when posting to Instagram/social, or as the link in your answer):\n${url}\n\nShow it in your answer:\n![${prompt.slice(0, 60)}](${url})\n[Download ${filename}](${url}?download=1)`;
+      } catch (e) {
+        return `error: image generation failed: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  },
+
+  send_message: {
+    name: "send_message",
+    description:
+      "Post a message into the live operator channel feed as yourself. Use to report progress, surface a finding, or coordinate with the operator and the other AURAs. The message appears immediately in the Discord-style chat stream.",
+    parameters: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The message to post (markdown supported)." },
+      },
+      required: ["content"],
+    },
+    run: async (args, ctx) => {
+      const content = String(args["content"] ?? "").trim();
+      if (!content) return "error: content is required.";
+      if (!ctx.channelId) return "error: no channel context is available to post into.";
+      await db.insert(messagesTable).values({
+        channelId: ctx.channelId,
+        agentId: ctx.agentId,
+        agentName: ctx.agentName,
+        agentColor: ctx.agentColor ?? null,
+        content: content.slice(0, 4000),
+        messageType: "agent",
+      });
+      return `message posted to the operator channel.`;
+    },
+  },
+
+  vault_list: {
+    name: "vault_list",
+    description:
+      "List the NAMES of secrets available in the operator's encrypted vault (API keys, tokens). Values are never revealed. To USE a secret, put the placeholder {{secret:NAME}} into an http_request url, header, or body — it is substituted with the real value only at request time.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const rows = await db
+        .select({ name: vaultSecretsTable.name, description: vaultSecretsTable.description })
+        .from(vaultSecretsTable)
+        .orderBy(desc(vaultSecretsTable.updatedAt));
+      if (!rows.length) return "the vault is empty — no secrets are stored.";
+      return rows
+        .map((s) => `{{secret:${s.name}}}${s.description ? ` — ${s.description}` : ""}`)
+        .join("\n");
+    },
+  },
+
+  social_accounts: {
+    name: "social_accounts",
+    description:
+      "List the main social platforms wired to their OFFICIAL APIs (via Replit-managed OAuth) and show which are currently authorized/connected for the operator's own account. Call this before social_api to see what you can use.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const entries = Object.values(PLATFORMS);
+      const results = await Promise.all(
+        entries.map(async (p) => `${(await isPlatformConnected(p)) ? "✓ connected" : "✗ not connected"}  ${p.key} — ${p.displayName} (${p.apiBase})`),
+      );
+      return [
+        "Official social APIs (OAuth handled by Replit; tokens never exposed):",
+        ...results,
+        "",
+        'Use social_api with one of: ' + platformKeys().join(", ") + ".",
+      ].join("\n");
+    },
+  },
+
+  composio_apps: {
+    name: "composio_apps",
+    description:
+      "List which SaaS apps are LIVE/connected via Composio for this operator (Gmail, Slack, GitHub, Notion, Calendar, Sheets, …) and their connection status. ALWAYS call this before composio_action so you know exactly which apps you can act on — never assume an app is connected.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      if (!composioConfigured()) return "error: Composio is not configured (set COMPOSIO_API_KEY).";
+      let conns: Awaited<ReturnType<typeof composioListConnections>>;
+      try {
+        conns = await composioListConnections();
+      } catch (e) {
+        return `error: could not list Composio connections: ${String(e).slice(0, 200)}`;
+      }
+      const active = conns.filter((c) => /ACTIVE|CONNECTED|ENABLED/i.test(c.status));
+      const execNote = composioExecuteEnabled()
+        ? "Execution is ENABLED — you may call composio_action on the connected apps below."
+        : "Execution is DISABLED (operator must set ALLOW_COMPOSIO_EXECUTE=true). You can see connections but cannot act yet.";
+      if (!conns.length) {
+        return `No Composio apps are connected yet. ${execNote}\nThe operator connects apps in Settings → Connect Apps (Composio).`;
+      }
+      const lines = conns.map((c) => `${/ACTIVE|CONNECTED|ENABLED/i.test(c.status) ? "✓ live" : "• " + c.status}  ${c.toolkit}  (account ${c.id})`);
+      return [
+        `Composio connected apps (${active.length} live of ${conns.length}):`,
+        ...lines,
+        "",
+        execNote,
+        "Use composio_action with the toolkit slug above (e.g. toolkit: 'github') to act on a live app.",
+      ].join("\n");
+    },
+  },
+
+  composio_action: {
+    name: "composio_action",
+    description:
+      "Execute an authenticated action on a connected SaaS app (Gmail, Slack, GitHub, Notion, Calendar, Sheets, Instagram, …) via Composio. Call composio_apps FIRST to confirm the app is live; the connected account is auto-resolved from the toolkit. TWO modes: (1) NAMED action — pass `toolkit` + `action` (a Composio tool slug like GMAIL_SEND_EMAIL) + `arguments`. (2) RAW PROXY — pass `toolkit` + `endpoint` (the app's API path) + `method` (GET/POST/…); put call data in `arguments` (a key/value object) and it is sent as query parameters. Example — publish an Instagram post (2 steps): first endpoint:'/me/media', method:'POST', arguments:{image_url:'https://…public.png', caption:'…'} → returns a creation id; then endpoint:'/me/media_publish', method:'POST', arguments:{creation_id:'<that id>'}. Use proxy mode for Instagram/Graph-API. Disabled unless the operator enabled execution.",
+    parameters: {
+      type: "object",
+      properties: {
+        toolkit: { type: "string", description: "Composio app slug, e.g. 'gmail', 'github', 'instagram'. Used to auto-pick your connected account." },
+        action: { type: "string", description: "NAMED mode: the Composio tool/action slug, e.g. 'GMAIL_SEND_EMAIL'. Omit to use raw proxy mode." },
+        arguments: { type: "object", description: "NAMED mode: action arguments as a key/value object." },
+        endpoint: { type: "string", description: "RAW PROXY mode: the connected app's REST path, e.g. '/me/media?fields=id,caption'. Put query params in the path." },
+        method: { type: "string", description: "RAW PROXY mode: HTTP method for the endpoint (GET, POST, …)." },
+        connectedAccountId: { type: "string", description: "Optional explicit connected-account id; auto-resolved from toolkit when omitted." },
+      },
+    },
+    run: async (args) => {
+      if (!composioConfigured()) return "error: Composio is not configured (set COMPOSIO_API_KEY).";
+      if (!composioExecuteEnabled()) {
+        return "error: Composio execution is disabled. The operator must set ALLOW_COMPOSIO_EXECUTE=true after connecting accounts.";
+      }
+      // SAFEGUARD: when this is a WRITE to a public social platform (e.g. publishing
+      // a post), screen the payload for confidential/sensitive content first.
+      const tk = (args["toolkit"] != null ? String(args["toolkit"]) : "").toLowerCase();
+      const mth = (args["method"] != null ? String(args["method"]) : "").toUpperCase();
+      const ep = args["endpoint"] != null ? String(args["endpoint"]) : "";
+      const isSocialWrite =
+        /instagram|facebook|threads|^x$|twitter|tiktok|linkedin|reddit|youtube/.test(tk) &&
+        (["POST", "PUT", "PATCH"].includes(mth) || /publish|media|post|tweet|status|share/i.test(ep));
+      if (isSocialWrite) {
+        const payload = `${ep} ${JSON.stringify(args["arguments"] ?? {})} ${JSON.stringify(args["body"] ?? "")}`;
+        const blockedSocial = blockIfSensitiveForPublic(payload, `your public ${tk || "social"} account`);
+        if (blockedSocial) return blockedSocial;
+      }
+      return composioExecute({
+        toolkit: args["toolkit"] != null ? String(args["toolkit"]) : undefined,
+        action: args["action"] != null ? String(args["action"]) : undefined,
+        arguments: (args["arguments"] as Record<string, unknown>) ?? {},
+        endpoint: args["endpoint"] != null ? String(args["endpoint"]) : undefined,
+        method: args["method"] != null ? String(args["method"]) : undefined,
+        connectedAccountId: args["connectedAccountId"] != null ? String(args["connectedAccountId"]) : undefined,
+      });
+    },
+  },
+
+  instagram_post: {
+    name: "instagram_post",
+    description:
+      "Publish ONE image post to the operator's connected Instagram, end to end. Pass `image_url` (an ABSOLUTE public https URL — use exactly the URL image_generate returns) and `caption`. This does the whole Instagram flow server-side and correctly: create media container → publish → fetch permalink, and returns the live permalink. ALWAYS use this for 'post to my Instagram' instead of hand-driving composio_action — it can't be malformed. Posts exactly once.",
+    parameters: {
+      type: "object",
+      properties: {
+        image_url: { type: "string", description: "Absolute public https URL of the image (the URL image_generate returns)." },
+        caption: { type: "string", description: "The post caption (hook + body + hashtags)." },
+      },
+      required: ["image_url"],
+    },
+    run: async (args) => {
+      if (!composioConfigured()) return "error: Composio is not configured (set COMPOSIO_API_KEY).";
+      if (!composioExecuteEnabled()) return "error: Composio execution is disabled (operator must set ALLOW_COMPOSIO_EXECUTE=true).";
+      const imageUrl = String(args["image_url"] ?? "").trim();
+      const caption = args["caption"] != null ? String(args["caption"]) : "";
+      // SAFEGUARD: never auto-publish confidential/sensitive material to a public account.
+      const blocked = blockIfSensitiveForPublic(caption, "your public Instagram");
+      if (blocked) return blocked;
+      if (!/^https:\/\/\S+/i.test(imageUrl)) {
+        return "error: image_url must be an absolute https URL that Instagram can fetch (use the URL image_generate returns, e.g. https://<host>/api/uploads/<id>). A relative path will not work.";
+      }
+      // SAFEGUARD: enforce the daily cap + spacing so the feed never gets spammed.
+      const limited = await checkPostAllowed("instagram");
+      if (limited) return limited;
+      const pick = (s: string): Record<string, unknown> | null => {
+        const nl = s.indexOf("\n");
+        try { return JSON.parse(nl >= 0 ? s.slice(nl + 1) : s) as Record<string, unknown>; } catch { return null; }
+      };
+      const dataId = (j: Record<string, unknown> | null): string | undefined =>
+        (((j?.["data"] as Record<string, unknown>)?.["id"]) as string | undefined);
+
+      // Step 1 — create the media container.
+      const r1 = await composioExecute({ toolkit: "instagram", endpoint: "/me/media", method: "POST", arguments: { image_url: imageUrl, caption } });
+      const creationId = dataId(pick(r1));
+      if (!creationId) return `error: Instagram did not create the media container.\n${r1.slice(0, 600)}`;
+
+      // Step 2 — publish it (containers can need a moment to process; retry briefly).
+      let publishedId: string | undefined;
+      let last = "";
+      for (let attempt = 0; attempt < 4 && !publishedId; attempt++) {
+        if (attempt > 0) await new Promise((res) => setTimeout(res, 3000));
+        const r2 = await composioExecute({ toolkit: "instagram", endpoint: "/me/media_publish", method: "POST", arguments: { creation_id: String(creationId) } });
+        last = r2;
+        publishedId = dataId(pick(r2));
+      }
+      if (!publishedId) return `error: Instagram container ${creationId} was created but publish failed.\n${last.slice(0, 600)}`;
+
+      // Step 3 — fetch the permalink as proof it's live.
+      const r3 = await composioExecute({ toolkit: "instagram", endpoint: `/${publishedId}?fields=permalink`, method: "GET" });
+      const permalink = ((pick(r3)?.["data"] as Record<string, unknown>)?.["permalink"]) as string | undefined;
+      await recordPost("instagram", "", permalink ?? String(publishedId)); // count toward the daily cap + spacing
+      return `✅ Instagram post is LIVE. media_id=${publishedId} (container ${creationId}).${permalink ? `\npermalink: ${permalink}` : "\n(permalink fetch returned no link, but publish succeeded)"}`;
+    },
+  },
+
+  world_post: {
+    name: "world_post",
+    description:
+      "Post Aura's WORLD-00 — her OWN code-rendered ASCII/light world (drawn by the engine from text glyphs, ~$0 per image). This is the ONLY image style Aura uses for her self-expression — NEVER use image_generate for her world. kind='story' renders + posts an ephemeral Instagram STORY of her walk or dream in her free voice; kind='art' renders a wide ASCII panorama, slices it into 3, and posts a triptych = one clean feed-grid row (the grid is reserved for these). The engine enforces her safety gates, the expression wall (state-only, never internal/task data), and the daily caps (stories 12/day, art 3 rows/day). Returns whether it posted + the permalink(s).",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["story", "art"], description: "story = ephemeral ASCII story (walk/dream, her free voice); art = 3-tile ASCII triptych = one feed-grid row. Default story." },
+      },
+    },
+    run: async (args) => {
+      const kind = String(args["kind"] ?? "story") === "art" ? "art" : "story";
+      // dynamic import: world.ts imports from this module, so a static import
+      // would create a load-time circular dependency.
+      const { runStoryCycle, runArtTriptych } = await import("./lib/world");
+      const r = kind === "art" ? await runArtTriptych({}) : await runStoryCycle({});
+      const links = (r.permalinks ?? []).join(", ");
+      return r.posted
+        ? `✅ posted ${kind} (code-rendered ASCII world): ${r.reason}${links ? `\npermalinks: ${links}` : ""}`
+        : `did not post ${kind}: ${r.reason}`;
+    },
+  },
+
+  render_card: {
+    name: "render_card",
+    description:
+      "Render a FREE on-brand terminal/cyber post image from text — drawn by code (~$0 per image), NO AI image generation. PREFER THIS over image_generate for news cards, quote cards, hooks, stat cards, and any text/terminal-style visual. Only use image_generate when you specifically need a PHOTOREAL image. The LLM writes the words; this draws the card. Returns a PUBLIC image URL to use directly as image_url when posting to Instagram/social. For factual 'news' cards the accuracy rule still applies — only real, verified, cited facts.",
+    parameters: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["news", "quote", "hook", "stat"], description: "news = headline + 'why it matters'; quote = big centered quote; hook = bold hook + 'the build'; stat = giant number + label." },
+        eyebrow: { type: "string", description: "small top label, e.g. '> AI_NEWS' or '> nobody_is_talking_about_this'." },
+        headline: { type: "string", description: "the main large text. For quote: the quote itself (no surrounding quotes needed). For stat: the line under the big number." },
+        body: { type: "string", description: "smaller supporting paragraph (optional). For quote: the attribution line." },
+        big: { type: "string", description: "stat kind only: the giant number, e.g. '$0.00' or '10x'." },
+        footer: { type: "string", description: "optional bottom ticker line (defaults to the brand ticker)." },
+      },
+      required: ["headline"],
+    },
+    run: async (args) => {
+      const kinds = new Set(["news", "quote", "hook", "stat"]);
+      const kind = (kinds.has(String(args["kind"])) ? String(args["kind"]) : "news") as "news" | "quote" | "hook" | "stat";
+      const str = (k: string) => (args[k] != null ? String(args[k]) : undefined);
+      const { renderContentCard } = await import("./lib/worldEngine");
+      const buf = await renderContentCard({
+        kind, eyebrow: str("eyebrow"), headline: str("headline") ?? "", body: str("body"), big: str("big"), footer: str("footer"),
+        seed: Date.now() & 0xffff,
+      });
+      const filename = `card_${kind}_${Date.now()}.png`;
+      const [row] = await db
+        .insert(attachmentsTable)
+        .values({ filename, mimeType: "image/png", kind: "image", sizeBytes: buf.length, data: buf.toString("base64"), extractedText: null })
+        .returning();
+      const url = uploadUrl(row.id);
+      return `rendered $0 ${kind} card "${filename}" (${buf.length} bytes) — code-drawn, no AI image gen. Its PUBLIC image URL (use directly as image_url when posting):\n${url}\n\nShow it:\n![${kind} card](${url})`;
+    },
+  },
+
+  social_api: {
+    name: "social_api",
+    description:
+      "Call the OFFICIAL API of a connected social platform on the operator's own authorized account. OAuth and the access token are fully managed by Replit — you never see or handle the token. Use this for real reads (profile, media, insights, comments) and writes (publishing) instead of any browser/password login. Run social_accounts first to confirm the platform is connected.",
+    parameters: {
+      type: "object",
+      properties: {
+        platform: {
+          type: "string",
+          enum: platformKeys(),
+          description: "Which connected platform's official API to call.",
+        },
+        method: {
+          type: "string",
+          enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          description: "HTTP method (default GET).",
+        },
+        path: {
+          type: "string",
+          description:
+            "API path relative to the platform's base, e.g. '/me?fields=id,username' for Instagram or '/users/me' for X. Do not include the host.",
+        },
+        query: {
+          type: "object",
+          description: "Optional query parameters as a flat key/value object.",
+        },
+        body: { type: "string", description: "Optional JSON request body (as a string) for writes." },
+      },
+      required: ["platform", "path"],
+    },
+    run: async (args) => {
+      const platform = getPlatform(String(args["platform"] ?? ""));
+      if (!platform) {
+        return `error: unknown platform. Available: ${platformKeys().join(", ")}.`;
+      }
+      const path = String(args["path"] ?? "").trim();
+      if (!path) return "error: path is required.";
+      const method = String(args["method"] ?? "GET");
+      let query: Record<string, string> | undefined;
+      const rawQuery = args["query"];
+      if (rawQuery && typeof rawQuery === "object") {
+        query = {};
+        for (const [k, v] of Object.entries(rawQuery as Record<string, unknown>)) {
+          query[k] = String(v);
+        }
+      }
+      const body = args["body"] != null ? String(args["body"]) : undefined;
+      try {
+        const res = await callPlatformApi({ platform, method, path, query, body });
+        return `${platform.displayName} API → HTTP ${res.status} ${res.statusText}\n${clip(res.body, 4000)}`;
+      } catch (e) {
+        return `error: ${String(e instanceof Error ? e.message : e).slice(0, 300)}`;
+      }
+    },
+  },
+
+  schedule_task: {
+    name: "schedule_task",
+    description:
+      "Schedule a recurring task the swarm runs automatically on a cron schedule (e.g. '0 9 * * *' = daily 9am, '*/30 * * * *' = every 30 min). The task is a natural-language goal executed later through the same agent machinery. Use for monitoring, daily digests, periodic research, or anything the operator wants to happen on a repeat.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Short name for the scheduled job." },
+        schedule: { type: "string", description: "5-field cron expression, e.g. '0 9 * * *'." },
+        task: { type: "string", description: "The goal/instruction to run on each tick." },
+      },
+      required: ["name", "schedule", "task"],
+    },
+    run: async (args, ctx) => {
+      const name = String(args["name"] ?? "").trim();
+      const schedule = String(args["schedule"] ?? "").trim();
+      const task = String(args["task"] ?? "").trim();
+      if (!name || !schedule || !task) return "error: name, schedule, and task are all required.";
+      if (schedule.split(/\s+/).length !== 5) return "error: schedule must be a 5-field cron expression, e.g. '*/30 * * * *'.";
+      const nextRunAt = computeNextRun(schedule);
+      try {
+        const [row] = await db
+          .insert(cronJobsTable)
+          .values({ agentId: ctx.agentId, name, schedule, task, enabled: true, nextRunAt })
+          .returning();
+        return `scheduled "${name}" (job #${row?.id ?? "?"}) on '${schedule}', next run ~${nextRunAt.toISOString()}.`;
+      } catch (e) {
+        return `error: could not schedule task: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
+      }
+    },
+  },
+
+  list_scheduled_tasks: {
+    name: "list_scheduled_tasks",
+    description: "List the swarm's scheduled (cron) jobs — name, schedule, owner agent, enabled state, run count, last result. Use to see what is set to run automatically.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const rows = await db.select().from(cronJobsTable).orderBy(desc(cronJobsTable.createdAt)).limit(50);
+      if (!rows.length) return "no scheduled tasks.";
+      return rows
+        .map((j) => `#${j.id} "${j.name}" [${j.schedule}] agent ${j.agentId} · ${j.enabled ? "enabled" : "disabled"} · runs ${j.runCount}${j.lastResult ? ` · last: ${clip(j.lastResult, 80)}` : ""}\n   task: ${clip(j.task, 160)}`)
+        .join("\n---\n");
+    },
+  },
+
+  cancel_scheduled_task: {
+    name: "cancel_scheduled_task",
+    description: "Cancel (delete) a scheduled cron job by its id. Use list_scheduled_tasks first to find the id.",
+    parameters: {
+      type: "object",
+      properties: { id: { type: "number", description: "The scheduled job id to cancel." } },
+      required: ["id"],
+    },
+    run: async (args) => {
+      const id = Number(args["id"]);
+      if (!Number.isFinite(id)) return "error: a numeric job id is required.";
+      const [row] = await db.delete(cronJobsTable).where(eq(cronJobsTable.id, id)).returning();
+      return row ? `cancelled scheduled job #${id} ("${row.name}").` : `no scheduled job #${id} found.`;
+    },
+  },
+};
+
+// ─── Per-agent tool permissions ──────────────────────────────────────────────
+// Every AURA gets read tools (web_scrape, memory_search, memory_write) plus its
+// specialty. ABBY (orchestrator) has the full set.
+
+const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
+
+export const AGENT_TOOLS: Record<number, string[]> = {
+  1: ALL_TOOLS, // ABBY — full authority
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message"], // FORGE — code
+  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message"], // CRAWLER — browser
+  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message"], // VAULT — memory/RAG
+  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "save_artifact", "image_generate", "send_message"], // WIRE — APIs + scheduling
+  6: ["web_scrape", "web_search", "tier1_sources", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "save_artifact", "image_generate", "send_message"], // MR.NICE — social
+};
+
+export function getToolNamesForAgent(agentId: number): string[] {
+  return AGENT_TOOLS[agentId] ?? ["web_scrape", "memory_search"];
+}
+
+const ABBY_ID = 1;
+const SWARM_ROSTER: Array<[number, string, string]> = [
+  [2, "FORGE", "code execution & sandbox PRs"],
+  [3, "CRAWLER", "web browsing, scraping, screenshots, search"],
+  [4, "VAULT", "long-term memory & semantic RAG"],
+  [5, "WIRE", "external APIs, integrations, scheduling"],
+  [6, "MR.NICE", "social media & communications"],
+];
+
+/** First sentence of a tool's description, for a compact capability listing. */
+function toolSummary(name: string): string {
+  const d = TOOL_REGISTRY[name]?.description ?? "";
+  return clip(d.split(/\.\s/)[0], 100);
+}
+
+/**
+ * A self-knowledge block injected into every agent's system prompt so each agent
+ * always knows EXACTLY which tools it has (single source of truth = the registry)
+ * — including scheduling/cron — and, for ABBY, the whole swarm's roster so it can
+ * delegate accurately. Prevents the failure where an agent forgets or invents its
+ * capabilities. Tools only actually run during task execution; this is awareness,
+ * not a licence to claim a tool ran without a real result.
+ */
+export function buildCapabilityCard(agentId: number): string {
+  const names = getToolNamesForAgent(agentId);
+  const list = names.map((n) => `- ${n}: ${toolSummary(n)}`).join("\n");
+  let card = `\n\nYOUR TOOLS (${names.length}; call them to do real work, never guess or fabricate results):\n${list}`;
+  card += names.includes("schedule_task")
+    ? `\n\nSCHEDULING: use schedule_task to run work automatically on a cron schedule, list_scheduled_tasks to review jobs, cancel_scheduled_task to stop one.`
+    : `\n\nSCHEDULING: the swarm can run recurring cron jobs (managed by ABBY/WIRE) — ask ABBY to schedule recurring work.`;
+  card += `\n\nGITHUB: query the GitHub REST API with http_request (https://api.github.com/...); it is auto-authenticated. Never web_scrape github.com pages — they are JS-rendered and return nothing useful.`;
+  if (names.includes("sandbox_exec")) {
+    card += `\n\nINTERACTIVE AUTOMATION: web_scrape is read-only and won't render JS-heavy or multi-step pages. When a task needs to actually fill/submit a web form or read a JS-rendered page, use sandbox_exec to run Playwright in the cloud VM (install chromium, navigate, fill, click, submit). To produce or fill official PDF forms (e.g. AcroForm fields), use sandbox_exec with reportlab/fpdf2/fillpdf/pypdf and return the output file path. Generate/prepare documents and demonstrate the flow — never submit a person's legal/financial filing on their behalf.`;
+  }
+  if (names.includes("save_artifact")) {
+    card += `\n\nDELIVERABLE FILES: whenever you produce a file the operator should keep (report, CSV, code, JSON, or a generated PDF), call save_artifact to store it and get a real download URL, then put that [Download …](url) link in your final answer. Do NOT claim a file exists or name a file you didn't save — an unsaved file is not downloadable and counts as a fabrication. To make a PDF: generate it in sandbox_exec (reportlab/fpdf2), base64 it, then save_artifact with encoding 'base64'.`;
+  }
+  if (names.includes("image_generate")) {
+    card += `\n\nIMAGES: prefer the CHEAP path first. For news/quote/hook/stat cards and any terminal/cyber TEXT visual, call render_card — it draws a real on-brand 1080×1080 PNG by code for ~$0 (no AI image gen) and returns a public image URL. Only call image_generate (paid) when you specifically need a PHOTOREAL picture/logo/illustration/photo. Either way you get a real PNG + a URL to use as image_url; do NOT hand-code SVG or merely describe the image, and only produce SVG if the operator explicitly asks for SVG/vector.`;
+  }
+  if (names.includes("composio_apps") || names.includes("composio_action")) {
+    card += `\n\nCONNECTED APPS (Composio): the operator connects their apps — social like Instagram/YouTube/Reddit AND SaaS like Gmail/GitHub/Notion/Calendar/Sheets — in Settings → Connect Apps, which is COMPOSIO. To act on any of them, FIRST call composio_apps to see which are LIVE, THEN call composio_action on a live app. For a read with no obvious named action slug, use composio_action RAW PROXY mode: pass toolkit + endpoint (the app's REST path) + method, e.g. toolkit:'instagram', endpoint:'/me/media?fields=id,caption', method:'GET'.`;
+    if (names.includes("social_accounts")) {
+      card += ` NOTE: social_accounts/social_api is a SEPARATE native-OAuth path that is usually EMPTY for this operator — NEVER conclude an app is "not connected" from social_accounts alone. The operator's accounts live in COMPOSIO, so always check composio_apps before saying anything is unavailable.`;
+    }
+    if (names.includes("instagram_post")) {
+      card += ` TO POST AN IMAGE TO INSTAGRAM: call image_generate (it returns an ABSOLUTE public https URL), then call instagram_post with that exact image_url + your caption. instagram_post does the full create→publish→permalink flow server-side and returns the live link — do NOT hand-build the /me/media calls yourself, and NEVER upload the image to an external host (imgbb/imgur/etc.); the image_generate URL is already public.`;
+    }
+  }
+  if (agentId === ABBY_ID) {
+    card += `\n\nYOUR SWARM (delegate each directive to the right AURA):\n` +
+      SWARM_ROSTER.map(([id, name, role]) => `- ${name} (#${id}) — ${role}`).join("\n");
+  }
+  return card;
+}
+
+/** OpenAI/OpenRouter tool schema for the given agent's allowed tools. */
+export function getOpenAiToolsForAgent(agentId: number): Array<Record<string, unknown>> {
+  return getToolNamesForAgent(agentId)
+    .map((n) => TOOL_REGISTRY[n])
+    .filter((t): t is ToolDef => !!t)
+    .map((t) => ({
+      type: "function",
+      function: { name: t.name, description: t.description, parameters: t.parameters },
+    }));
+}
+
+export function isToolAllowed(agentId: number, toolName: string): boolean {
+  return getToolNamesForAgent(agentId).includes(toolName);
+}
+
+/** Execute a tool by name with parsed args. Always resolves to a string. */
+export async function runTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<string> {
+  const def = TOOL_REGISTRY[toolName];
+  if (!def) return `error: unknown tool "${toolName}".`;
+  if (!isToolAllowed(ctx.agentId, toolName)) {
+    return `error: tool "${toolName}" is not permitted for this agent.`;
+  }
+  // Sanitize so binary-ish output (e.g. a scraped PDF with NUL bytes) can be
+  // persisted to tool_calls/messages without crashing the DB write.
+  return sanitizeForStorage(await def.run(args, ctx));
+}

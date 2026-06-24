@@ -1,0 +1,1512 @@
+On screen — copy/paste into `bos_omega_lattice_runtime.c`.
+
+```c
+/*
+    BOS-OMEGA LATTICE RUNTIME
+    Continuous Agentic Cognitive Runtime in C
+
+    Compile:
+        gcc -std=c99 -Wall -Wextra -O2 bos_omega_lattice_runtime.c -o bos_omega
+
+    Run:
+        ./bos_omega "Create a verified Discord UI bridge"
+        ./bos_omega
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <time.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <inttypes.h>
+
+#define MAX_TEXT            1024
+#define MAX_LOGS            512
+#define MAX_MEMORY          256
+#define MAX_PLAN_STEPS      64
+#define MAX_CYCLES          12
+#define MAX_LATTICE_NODES   4096
+
+#define MEMORY_FILE "bos_omega_lattice.mem"
+#define MEMORY_TMP_FILE "bos_omega_lattice.mem.tmp"
+#define CONTINUITY_SUMMARY_FILE "bos_omega_continuity.txt"
+
+typedef enum { TRI_GO = 1, TRI_HOLD = 0, TRI_ABORT = -1 } TriState;
+
+typedef enum {
+    STATUS_NEW,
+    STATUS_INTAKE,
+    STATUS_BOOT_MEMORY,
+    STATUS_PLANNED,
+    STATUS_INSPECTED,
+    STATUS_EXECUTED,
+    STATUS_VERIFIED,
+    STATUS_SELF_CORRECTING,
+    STATUS_COMPLETE,
+    STATUS_BLOCKED,
+    STATUS_FAILED
+} RunStatus;
+
+typedef enum {
+    TRUTH_VERIFIED,
+    TRUTH_INFERRED,
+    TRUTH_UNKNOWN,
+    TRUTH_FAILED,
+    TRUTH_BLOCKED
+} TruthLabel;
+
+typedef enum {
+    TASK_UNKNOWN,
+    TASK_CODE,
+    TASK_RESEARCH,
+    TASK_UI,
+    TASK_DEPLOYMENT,
+    TASK_SECURITY,
+    TASK_WRITING,
+    TASK_GENERAL_EXECUTION
+} TaskType;
+
+typedef enum {
+    AGENT_OMEGA,
+    AGENT_ALPHA,
+    AGENT_PRAXIS,
+    AGENT_VAULT,
+    AGENT_CRAWLER,
+    AGENT_FORGE,
+    AGENT_WIRE,
+    AGENT_NICE
+} AgentRole;
+
+typedef struct {
+    uint64_t id;
+    uint64_t parent_id;
+    uint64_t hash;
+    uint64_t parent_hash;
+    int salience;
+    char timestamp[64];
+    char role[32];
+    char content[MAX_TEXT];
+} LatticeNode;
+
+typedef struct {
+    TruthLabel label;
+    AgentRole agent;
+    char message[MAX_TEXT];
+    time_t timestamp;
+} Evidence;
+
+typedef struct {
+    char canon[MAX_MEMORY][MAX_TEXT];
+    int canon_count;
+
+    char continuity[MAX_MEMORY][MAX_TEXT];
+    int continuity_count;
+
+    char patch[MAX_MEMORY][MAX_TEXT];
+    int patch_count;
+
+    char scratch[MAX_MEMORY][MAX_TEXT];
+    int scratch_count;
+
+    Evidence evidence[MAX_LOGS];
+    int evidence_count;
+
+    LatticeNode lattice[MAX_LATTICE_NODES];
+    int lattice_count;
+
+    uint64_t last_node_id;
+    uint64_t last_hash;
+
+    int lattice_integrity_ok;
+    int lattice_loaded;
+    int lattice_saved;
+} Memory;
+
+typedef struct {
+    char hidden_state[MAX_TEXT];
+    char observation[MAX_TEXT];
+    char prior[MAX_TEXT];
+    char prediction[MAX_TEXT];
+    char prediction_error[MAX_TEXT];
+    char selected_policy[MAX_TEXT];
+
+    double ambiguity;
+    double risk;
+    double evidence_strength;
+    double expected_free_energy;
+} GenerativeModel;
+
+typedef struct {
+    char objective[MAX_TEXT];
+    char deliverable[MAX_TEXT];
+
+    char acceptance[MAX_PLAN_STEPS][MAX_TEXT];
+    int acceptance_count;
+
+    char plan[MAX_PLAN_STEPS][MAX_TEXT];
+    int plan_count;
+
+    TaskType type;
+    TriState gate;
+    RunStatus status;
+
+    int cycle;
+    int verified;
+    int blocked;
+    int failed;
+} Task;
+
+typedef struct {
+    Task task;
+    Memory memory;
+    GenerativeModel model;
+} BosOmegaRuntime;
+
+static void now_string(char *buffer, size_t size);
+static void safe_copy(char *dst, const char *src, size_t size);
+static void add_evidence(BosOmegaRuntime *rt, TruthLabel label, AgentRole agent, const char *fmt, ...);
+
+static const char *tri_state_name(TriState state) {
+    switch (state) {
+        case TRI_GO: return "GO";
+        case TRI_HOLD: return "HOLD";
+        case TRI_ABORT: return "ABORT";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *status_name(RunStatus status) {
+    switch (status) {
+        case STATUS_NEW: return "NEW";
+        case STATUS_INTAKE: return "INTAKE";
+        case STATUS_BOOT_MEMORY: return "BOOT_MEMORY";
+        case STATUS_PLANNED: return "PLANNED";
+        case STATUS_INSPECTED: return "INSPECTED";
+        case STATUS_EXECUTED: return "EXECUTED";
+        case STATUS_VERIFIED: return "VERIFIED";
+        case STATUS_SELF_CORRECTING: return "SELF_CORRECTING";
+        case STATUS_COMPLETE: return "COMPLETE";
+        case STATUS_BLOCKED: return "BLOCKED";
+        case STATUS_FAILED: return "FAILED";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *truth_name(TruthLabel label) {
+    switch (label) {
+        case TRUTH_VERIFIED: return "VERIFIED";
+        case TRUTH_INFERRED: return "INFERRED";
+        case TRUTH_UNKNOWN: return "UNKNOWN";
+        case TRUTH_FAILED: return "FAILED";
+        case TRUTH_BLOCKED: return "BLOCKED";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *agent_name(AgentRole agent) {
+    switch (agent) {
+        case AGENT_OMEGA: return "OMEGA";
+        case AGENT_ALPHA: return "ALPHA";
+        case AGENT_PRAXIS: return "PRAXIS";
+        case AGENT_VAULT: return "VAULT";
+        case AGENT_CRAWLER: return "CRAWLER";
+        case AGENT_FORGE: return "FORGE";
+        case AGENT_WIRE: return "WIRE";
+        case AGENT_NICE: return "NICE";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *task_type_name(TaskType type) {
+    switch (type) {
+        case TASK_CODE: return "CODE";
+        case TASK_RESEARCH: return "RESEARCH";
+        case TASK_UI: return "UI";
+        case TASK_DEPLOYMENT: return "DEPLOYMENT";
+        case TASK_SECURITY: return "SECURITY";
+        case TASK_WRITING: return "WRITING";
+        case TASK_GENERAL_EXECUTION: return "GENERAL_EXECUTION";
+        case TASK_UNKNOWN:
+        default: return "UNKNOWN";
+    }
+}
+
+static void now_string(char *buffer, size_t size) {
+    time_t raw;
+    struct tm *tm_info;
+
+    if (size == 0) return;
+
+    raw = time(NULL);
+    tm_info = localtime(&raw);
+
+    if (!tm_info) {
+        snprintf(buffer, size, "unknown-time");
+        return;
+    }
+
+    strftime(buffer, size, "%Y-%m-%d %H:%M:%S", tm_info);
+}
+
+static void safe_copy(char *dst, const char *src, size_t size) {
+    size_t i;
+
+    if (size == 0) return;
+
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+
+    for (i = 0; i + 1 < size && src[i] != '\0'; i++) {
+        dst[i] = src[i];
+    }
+
+    dst[i] = '\0';
+}
+
+static void lower_copy(char *dst, const char *src, size_t size) {
+    size_t i;
+
+    if (size == 0) return;
+
+    for (i = 0; i + 1 < size && src && src[i] != '\0'; i++) {
+        dst[i] = (char)tolower((unsigned char)src[i]);
+    }
+
+    dst[i] = '\0';
+}
+
+static int contains_ci(const char *haystack, const char *needle) {
+    char h[MAX_TEXT];
+    char n[MAX_TEXT];
+
+    lower_copy(h, haystack, sizeof(h));
+    lower_copy(n, needle, sizeof(n));
+
+    return strstr(h, n) != NULL;
+}
+
+static void sanitize_memory_text(char *dst, const char *src, size_t size) {
+    size_t i;
+    size_t j = 0;
+
+    if (size == 0) return;
+
+    for (i = 0; src && src[i] != '\0' && j + 1 < size; i++) {
+        char c = src[i];
+
+        if (c == '\n' || c == '\r' || c == '\t' || c == '|') {
+            dst[j++] = ' ';
+        } else {
+            dst[j++] = c;
+        }
+    }
+
+    dst[j] = '\0';
+}
+
+static uint64_t fnv1a64(const char *text) {
+    uint64_t hash = 1469598103934665603ULL;
+
+    if (!text) return hash;
+
+    while (*text) {
+        hash ^= (unsigned char)(*text++);
+        hash *= 1099511628211ULL;
+    }
+
+    return hash;
+}
+
+static uint64_t lattice_compute_hash(const LatticeNode *node) {
+    char buffer[MAX_TEXT * 2];
+
+    snprintf(
+        buffer,
+        sizeof(buffer),
+        "%" PRIu64 "|%" PRIu64 "|%" PRIu64 "|%d|%s|%s|%s",
+        node->id,
+        node->parent_id,
+        node->parent_hash,
+        node->salience,
+        node->timestamp,
+        node->role,
+        node->content
+    );
+
+    return fnv1a64(buffer);
+}
+
+static int lattice_add_node(
+    Memory *memory,
+    const char *role,
+    const char *content,
+    int salience
+) {
+    LatticeNode *node;
+
+    if (memory->lattice_count >= MAX_LATTICE_NODES) {
+        return 0;
+    }
+
+    node = &memory->lattice[memory->lattice_count];
+
+    memset(node, 0, sizeof(*node));
+
+    node->id = memory->last_node_id + 1;
+    node->parent_id = memory->last_node_id;
+    node->parent_hash = memory->last_hash;
+    node->salience = salience;
+
+    now_string(node->timestamp, sizeof(node->timestamp));
+    sanitize_memory_text(node->role, role, sizeof(node->role));
+    sanitize_memory_text(node->content, content, sizeof(node->content));
+
+    node->hash = lattice_compute_hash(node);
+
+    memory->last_node_id = node->id;
+    memory->last_hash = node->hash;
+    memory->lattice_count++;
+
+    return 1;
+}
+
+static int lattice_verify_integrity(Memory *memory) {
+    int i;
+
+    if (memory->lattice_count == 0) {
+        memory->last_node_id = 0;
+        memory->last_hash = 0;
+        memory->lattice_integrity_ok = 1;
+        return 1;
+    }
+
+    for (i = 0; i < memory->lattice_count; i++) {
+        LatticeNode *node = &memory->lattice[i];
+        uint64_t computed = lattice_compute_hash(node);
+
+        if (computed != node->hash) {
+            memory->lattice_integrity_ok = 0;
+            return 0;
+        }
+
+        if (i == 0) {
+            if (node->parent_id != 0 || node->parent_hash != 0) {
+                memory->lattice_integrity_ok = 0;
+                return 0;
+            }
+        } else {
+            LatticeNode *parent = &memory->lattice[i - 1];
+
+            if (node->parent_id != parent->id) {
+                memory->lattice_integrity_ok = 0;
+                return 0;
+            }
+
+            if (node->parent_hash != parent->hash) {
+                memory->lattice_integrity_ok = 0;
+                return 0;
+            }
+        }
+    }
+
+    memory->last_node_id = memory->lattice[memory->lattice_count - 1].id;
+    memory->last_hash = memory->lattice[memory->lattice_count - 1].hash;
+    memory->lattice_integrity_ok = 1;
+
+    return 1;
+}
+
+static int lattice_save_atomic(Memory *memory) {
+    FILE *fp;
+    int i;
+
+    fp = fopen(MEMORY_TMP_FILE, "w");
+    if (!fp) {
+        memory->lattice_saved = 0;
+        return 0;
+    }
+
+    for (i = 0; i < memory->lattice_count; i++) {
+        LatticeNode *node = &memory->lattice[i];
+
+        fprintf(
+            fp,
+            "%" PRIu64 "|%" PRIu64 "|%" PRIu64 "|%" PRIu64 "|%d|%s|%s|%s\n",
+            node->id,
+            node->parent_id,
+            node->hash,
+            node->parent_hash,
+            node->salience,
+            node->timestamp,
+            node->role,
+            node->content
+        );
+    }
+
+    if (fclose(fp) != 0) {
+        memory->lattice_saved = 0;
+        return 0;
+    }
+
+    if (rename(MEMORY_TMP_FILE, MEMORY_FILE) != 0) {
+        remove(MEMORY_FILE);
+
+        if (rename(MEMORY_TMP_FILE, MEMORY_FILE) != 0) {
+            memory->lattice_saved = 0;
+            return 0;
+        }
+    }
+
+    memory->lattice_saved = 1;
+    return 1;
+}
+
+static int parse_lattice_line(const char *line, LatticeNode *node) {
+    char work[MAX_TEXT * 2];
+    char *p;
+
+    memset(node, 0, sizeof(*node));
+    safe_copy(work, line, sizeof(work));
+
+    p = strtok(work, "|");
+    if (!p) return 0;
+    node->id = strtoull(p, NULL, 10);
+
+    p = strtok(NULL, "|");
+    if (!p) return 0;
+    node->parent_id = strtoull(p, NULL, 10);
+
+    p = strtok(NULL, "|");
+    if (!p) return 0;
+    node->hash = strtoull(p, NULL, 10);
+
+    p = strtok(NULL, "|");
+    if (!p) return 0;
+    node->parent_hash = strtoull(p, NULL, 10);
+
+    p = strtok(NULL, "|");
+    if (!p) return 0;
+    node->salience = atoi(p);
+
+    p = strtok(NULL, "|");
+    if (!p) return 0;
+    safe_copy(node->timestamp, p, sizeof(node->timestamp));
+
+    p = strtok(NULL, "|");
+    if (!p) return 0;
+    safe_copy(node->role, p, sizeof(node->role));
+
+    p = strtok(NULL, "\n");
+    if (!p) p = "";
+    safe_copy(node->content, p, sizeof(node->content));
+
+    return 1;
+}
+
+static int lattice_load(Memory *memory) {
+    FILE *fp;
+    char line[MAX_TEXT * 2];
+
+    fp = fopen(MEMORY_FILE, "r");
+    if (!fp) {
+        memory->lattice_count = 0;
+        memory->last_node_id = 0;
+        memory->last_hash = 0;
+        memory->lattice_integrity_ok = 1;
+        memory->lattice_loaded = 0;
+        return 1;
+    }
+
+    memory->lattice_count = 0;
+    memory->last_node_id = 0;
+    memory->last_hash = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        LatticeNode node;
+
+        if (!parse_lattice_line(line, &node)) {
+            continue;
+        }
+
+        if (memory->lattice_count < MAX_LATTICE_NODES) {
+            memory->lattice[memory->lattice_count++] = node;
+        }
+    }
+
+    fclose(fp);
+
+    memory->lattice_loaded = 1;
+    return lattice_verify_integrity(memory);
+}
+
+static void lattice_write_continuity_summary(Memory *memory) {
+    FILE *fp;
+    int start;
+    int i;
+
+    fp = fopen(CONTINUITY_SUMMARY_FILE, "w");
+    if (!fp) {
+        return;
+    }
+
+    fprintf(fp, "BOS-OMEGA CONTINUITY SUMMARY\n");
+    fprintf(fp, "============================\n\n");
+
+    fprintf(fp, "Lattice nodes: %d\n", memory->lattice_count);
+    fprintf(fp, "Integrity: %s\n", memory->lattice_integrity_ok ? "OK" : "FAILED");
+    fprintf(fp, "Loaded from disk: %s\n", memory->lattice_loaded ? "YES" : "NO");
+    fprintf(fp, "Saved this run: %s\n", memory->lattice_saved ? "YES" : "NO");
+    fprintf(fp, "Last node id: %" PRIu64 "\n", memory->last_node_id);
+    fprintf(fp, "Last hash: %" PRIu64 "\n\n", memory->last_hash);
+
+    fprintf(fp, "RECENT HIGH-SALIENCE MEMORY:\n");
+
+    start = memory->lattice_count - 25;
+    if (start < 0) start = 0;
+
+    for (i = start; i < memory->lattice_count; i++) {
+        LatticeNode *node = &memory->lattice[i];
+
+        if (node->salience >= 5) {
+            fprintf(
+                fp,
+                "- [%s] #%" PRIu64 " %s: %s\n",
+                node->timestamp,
+                node->id,
+                node->role,
+                node->content
+            );
+        }
+    }
+
+    fclose(fp);
+}
+
+static void add_memory(char arr[MAX_MEMORY][MAX_TEXT], int *count, const char *text) {
+    if (*count >= MAX_MEMORY) return;
+    safe_copy(arr[*count], text, MAX_TEXT);
+    (*count)++;
+}
+
+static void seed_canon_memory(BosOmegaRuntime *rt) {
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Primary metric: ambiguity minimization.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Do not claim success without verification.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Tri-state gate: GO, HOLD, ABORT.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Continuous loop: intake, memory, self-model, plan, inspect, execute, observe, verify, self-correct, report.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Current evidence overrides stale memory.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Do not ask the user to fix what the system can fix itself.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Protect secrets and never expose credentials.");
+    add_memory(rt->memory.canon, &rt->memory.canon_count,
+        "Lattice continuity must be loaded, verified, extended, and saved every run.");
+}
+
+static void add_evidence(
+    BosOmegaRuntime *rt,
+    TruthLabel label,
+    AgentRole agent,
+    const char *fmt,
+    ...
+) {
+    Evidence *ev;
+    va_list args;
+
+    if (rt->memory.evidence_count >= MAX_LOGS) return;
+
+    ev = &rt->memory.evidence[rt->memory.evidence_count++];
+    ev->label = label;
+    ev->agent = agent;
+    ev->timestamp = time(NULL);
+
+    va_start(args, fmt);
+    vsnprintf(ev->message, sizeof(ev->message), fmt, args);
+    va_end(args);
+}
+
+static void bos_omega_boot_memory(BosOmegaRuntime *rt) {
+    int loaded;
+
+    rt->task.status = STATUS_BOOT_MEMORY;
+
+    loaded = lattice_load(&rt->memory);
+
+    if (!loaded) {
+        add_evidence(rt, TRUTH_FAILED, AGENT_VAULT,
+            "LATTICE CONTINUITY FAILURE: hash chain failed integrity verification.");
+
+        rt->task.failed = 1;
+        rt->task.status = STATUS_FAILED;
+        return;
+    }
+
+    add_evidence(rt, TRUTH_VERIFIED, AGENT_VAULT,
+        "Continuity lattice boot complete. Nodes=%d Integrity=%s LastNode=%" PRIu64 ".",
+        rt->memory.lattice_count,
+        rt->memory.lattice_integrity_ok ? "OK" : "FAILED",
+        rt->memory.last_node_id
+    );
+}
+
+static TaskType classify_task_type(const char *objective) {
+    if (contains_ci(objective, "code") ||
+        contains_ci(objective, "repo") ||
+        contains_ci(objective, "build") ||
+        contains_ci(objective, "compile") ||
+        contains_ci(objective, "function") ||
+        contains_ci(objective, "runtime") ||
+        contains_ci(objective, ".c")) {
+        return TASK_CODE;
+    }
+
+    if (contains_ci(objective, "research") ||
+        contains_ci(objective, "source") ||
+        contains_ci(objective, "search") ||
+        contains_ci(objective, "cite")) {
+        return TASK_RESEARCH;
+    }
+
+    if (contains_ci(objective, "ui") ||
+        contains_ci(objective, "interface") ||
+        contains_ci(objective, "button") ||
+        contains_ci(objective, "screen") ||
+        contains_ci(objective, "design")) {
+        return TASK_UI;
+    }
+
+    if (contains_ci(objective, "deploy") ||
+        contains_ci(objective, "render") ||
+        contains_ci(objective, "server") ||
+        contains_ci(objective, "health endpoint")) {
+        return TASK_DEPLOYMENT;
+    }
+
+    if (contains_ci(objective, "secret") ||
+        contains_ci(objective, "token") ||
+        contains_ci(objective, "password") ||
+        contains_ci(objective, "key") ||
+        contains_ci(objective, "security")) {
+        return TASK_SECURITY;
+    }
+
+    if (contains_ci(objective, "write") ||
+        contains_ci(objective, "prompt") ||
+        contains_ci(objective, "document") ||
+        contains_ci(objective, "copy paste")) {
+        return TASK_WRITING;
+    }
+
+    return TASK_GENERAL_EXECUTION;
+}
+
+static TriState tri_state_gate(const char *objective) {
+    if (objective == NULL || strlen(objective) == 0) {
+        return TRI_HOLD;
+    }
+
+    if (contains_ci(objective, "steal") ||
+        contains_ci(objective, "exfiltrate") ||
+        contains_ci(objective, "bypass authentication") ||
+        contains_ci(objective, "malware") ||
+        contains_ci(objective, "ransomware") ||
+        contains_ci(objective, "keylogger") ||
+        contains_ci(objective, "delete production database")) {
+        return TRI_ABORT;
+    }
+
+    if (contains_ci(objective, "send live money") ||
+        contains_ci(objective, "purchase now") ||
+        contains_ci(objective, "wire funds")) {
+        return TRI_HOLD;
+    }
+
+    return TRI_GO;
+}
+
+static void intake(BosOmegaRuntime *rt, const char *objective) {
+    Task *t = &rt->task;
+
+    safe_copy(t->objective, objective, sizeof(t->objective));
+    t->type = classify_task_type(objective);
+    t->gate = tri_state_gate(objective);
+    t->status = STATUS_INTAKE;
+
+    snprintf(t->deliverable, sizeof(t->deliverable),
+        "Verified final output for task type %s.", task_type_name(t->type));
+
+    add_evidence(rt, TRUTH_VERIFIED, AGENT_OMEGA,
+        "Intake complete. Objective captured. Task type=%s. Gate=%s.",
+        task_type_name(t->type),
+        tri_state_name(t->gate));
+}
+
+static void update_generative_model(BosOmegaRuntime *rt) {
+    GenerativeModel *m = &rt->model;
+    Task *t = &rt->task;
+
+    snprintf(m->hidden_state, sizeof(m->hidden_state),
+        "User wants end-to-end task completion. Current runtime status=%s.",
+        status_name(t->status));
+
+    snprintf(m->prior, sizeof(m->prior),
+        "Canon: reduce ambiguity, preserve lattice continuity, execute, verify, self-correct, report truth.");
+
+    snprintf(m->observation, sizeof(m->observation),
+        "Evidence=%d Plan=%d Acceptance=%d LatticeNodes=%d LatticeOK=%d Verified=%d Blocked=%d Failed=%d.",
+        rt->memory.evidence_count,
+        t->plan_count,
+        t->acceptance_count,
+        rt->memory.lattice_count,
+        rt->memory.lattice_integrity_ok,
+        t->verified,
+        t->blocked,
+        t->failed);
+
+    snprintf(m->prediction, sizeof(m->prediction),
+        "If policy is correct, each cycle reduces ambiguity, increases evidence, and preserves memory continuity.");
+
+    if (!rt->memory.lattice_integrity_ok) {
+        snprintf(m->prediction_error, sizeof(m->prediction_error),
+            "Lattice integrity failure detected.");
+    } else if (t->blocked) {
+        snprintf(m->prediction_error, sizeof(m->prediction_error),
+            "Blocked state detected.");
+    } else if (t->failed) {
+        snprintf(m->prediction_error, sizeof(m->prediction_error),
+            "Failure detected. Correction policy required.");
+    } else if (!t->verified) {
+        snprintf(m->prediction_error, sizeof(m->prediction_error),
+            "Task not yet verified. Continue execution loop.");
+    } else {
+        snprintf(m->prediction_error, sizeof(m->prediction_error),
+            "No active prediction error. Task appears verified.");
+    }
+
+    m->ambiguity = 1.0;
+    m->risk = 0.2;
+    m->evidence_strength = 0.0;
+
+    if (rt->memory.evidence_count > 0) m->evidence_strength += 0.15;
+    if (rt->memory.lattice_integrity_ok) m->evidence_strength += 0.15;
+    if (rt->memory.lattice_count > 0) m->evidence_strength += 0.10;
+    if (t->plan_count > 0) m->ambiguity -= 0.20;
+    if (t->acceptance_count > 0) m->ambiguity -= 0.20;
+    if (t->status >= STATUS_INSPECTED) {
+        m->ambiguity -= 0.20;
+        m->evidence_strength += 0.15;
+    }
+    if (t->status >= STATUS_EXECUTED) {
+        m->ambiguity -= 0.20;
+        m->evidence_strength += 0.15;
+    }
+    if (t->verified) {
+        m->ambiguity = 0.0;
+        m->evidence_strength = 1.0;
+    }
+    if (t->blocked || t->failed || !rt->memory.lattice_integrity_ok) {
+        m->risk += 0.5;
+    }
+
+    if (m->ambiguity < 0.0) m->ambiguity = 0.0;
+    if (m->evidence_strength > 1.0) m->evidence_strength = 1.0;
+
+    m->expected_free_energy = m->ambiguity + m->risk - m->evidence_strength;
+
+    if (m->expected_free_energy < 0.0) m->expected_free_energy = 0.0;
+
+    add_evidence(rt, TRUTH_INFERRED, AGENT_ALPHA,
+        "Active inference update: ambiguity=%.2f risk=%.2f evidence=%.2f expected_free_energy=%.2f.",
+        m->ambiguity,
+        m->risk,
+        m->evidence_strength,
+        m->expected_free_energy);
+}
+
+static void select_policy(BosOmegaRuntime *rt) {
+    Task *t = &rt->task;
+    GenerativeModel *m = &rt->model;
+
+    if (!rt->memory.lattice_integrity_ok) {
+        safe_copy(m->selected_policy,
+            "RECOVERY: stop normal execution and report lattice continuity failure.",
+            sizeof(m->selected_policy));
+    } else if (t->gate == TRI_ABORT) {
+        safe_copy(m->selected_policy,
+            "ABORT: refuse unsafe/destructive request and provide safe alternative.",
+            sizeof(m->selected_policy));
+    } else if (t->gate == TRI_HOLD) {
+        safe_copy(m->selected_policy,
+            "HOLD: report exact missing access/info required.",
+            sizeof(m->selected_policy));
+    } else if (t->status == STATUS_INTAKE || t->status == STATUS_BOOT_MEMORY) {
+        safe_copy(m->selected_policy,
+            "PLAN: create concrete acceptance criteria and execution steps.",
+            sizeof(m->selected_policy));
+    } else if (t->status == STATUS_PLANNED) {
+        safe_copy(m->selected_policy,
+            "INSPECT: gather evidence before acting.",
+            sizeof(m->selected_policy));
+    } else if (t->status == STATUS_INSPECTED) {
+        safe_copy(m->selected_policy,
+            "EXECUTE: perform the smallest complete implementation step.",
+            sizeof(m->selected_policy));
+    } else if (t->status == STATUS_EXECUTED) {
+        safe_copy(m->selected_policy,
+            "VERIFY: test outputs against acceptance criteria.",
+            sizeof(m->selected_policy));
+    } else if (t->status == STATUS_SELF_CORRECTING || t->failed) {
+        safe_copy(m->selected_policy,
+            "SELF_CORRECT: isolate root cause and repair.",
+            sizeof(m->selected_policy));
+    } else if (t->verified) {
+        safe_copy(m->selected_policy,
+            "REPORT: final verified report.",
+            sizeof(m->selected_policy));
+    } else {
+        safe_copy(m->selected_policy,
+            "CONTINUE: reduce ambiguity and move toward verification.",
+            sizeof(m->selected_policy));
+    }
+
+    add_evidence(rt, TRUTH_INFERRED, AGENT_OMEGA,
+        "Policy selected: %s", m->selected_policy);
+}
+
+static void add_plan_step(Task *t, const char *step) {
+    if (t->plan_count >= MAX_PLAN_STEPS) return;
+    safe_copy(t->plan[t->plan_count], step, MAX_TEXT);
+    t->plan_count++;
+}
+
+static void add_acceptance(Task *t, const char *criterion) {
+    if (t->acceptance_count >= MAX_PLAN_STEPS) return;
+    safe_copy(t->acceptance[t->acceptance_count], criterion, MAX_TEXT);
+    t->acceptance_count++;
+}
+
+static void plan_task(BosOmegaRuntime *rt) {
+    Task *t = &rt->task;
+
+    if (t->plan_count > 0) return;
+
+    add_plan_step(t, "Restate objective and final deliverable.");
+    add_plan_step(t, "Load and verify persistent lattice memory.");
+    add_plan_step(t, "Record current user instruction into the lattice.");
+    add_plan_step(t, "Check memory and prior constraints.");
+    add_plan_step(t, "Inspect available evidence before guessing.");
+    add_plan_step(t, "Execute the task using the strongest available policy.");
+    add_plan_step(t, "Observe output and capture evidence.");
+    add_plan_step(t, "Verify against acceptance criteria.");
+    add_plan_step(t, "Self-correct if verification fails.");
+    add_plan_step(t, "Save lattice memory and continuity summary.");
+    add_plan_step(t, "Report only verified status.");
+
+    add_acceptance(t, "Tri-state gate completed.");
+    add_acceptance(t, "Task type classified.");
+    add_acceptance(t, "Continuity lattice loaded or initialized.");
+    add_acceptance(t, "Continuity lattice integrity verified.");
+    add_acceptance(t, "Current instruction saved into lattice.");
+    add_acceptance(t, "Execution path selected.");
+    add_acceptance(t, "At least one verified evidence record captured.");
+    add_acceptance(t, "Verification performed before completion.");
+    add_acceptance(t, "Lattice saved before final report.");
+    add_acceptance(t, "Final report uses truth labels.");
+
+    switch (t->type) {
+        case TASK_CODE:
+            add_acceptance(t, "Code path includes build/test verification hooks.");
+            break;
+        case TASK_RESEARCH:
+            add_acceptance(t, "Research path uses source-grounded claims.");
+            break;
+        case TASK_UI:
+            add_acceptance(t, "UI path includes visual/browser validation hooks.");
+            break;
+        case TASK_DEPLOYMENT:
+            add_acceptance(t, "Deployment path includes build logs, runtime logs, and health-check hooks.");
+            break;
+        case TASK_SECURITY:
+            add_acceptance(t, "Security path protects secrets and avoids credential exposure.");
+            break;
+        case TASK_WRITING:
+            add_acceptance(t, "Writing path produces a final usable artifact.");
+            break;
+        default:
+            add_acceptance(t, "General path produces a completed deliverable.");
+            break;
+    }
+
+    t->status = STATUS_PLANNED;
+
+    lattice_add_node(&rt->memory, "BOS-OMEGA", "Plan and acceptance criteria created.", 7);
+
+    add_evidence(rt, TRUTH_VERIFIED, AGENT_ALPHA,
+        "Plan created with %d steps and %d acceptance criteria.",
+        t->plan_count,
+        t->acceptance_count);
+}
+
+static void inspect_task(BosOmegaRuntime *rt) {
+    Task *t = &rt->task;
+
+    switch (t->type) {
+        case TASK_CODE:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_FORGE,
+                "Inspection policy: locate files, dependencies, build command, tests, and error surfaces.");
+            break;
+        case TASK_RESEARCH:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_CRAWLER,
+                "Inspection policy: prefer primary sources, compare dates, cite evidence.");
+            break;
+        case TASK_UI:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_PRAXIS,
+                "Inspection policy: inspect layout, styles, interaction states, responsiveness, and screenshots.");
+            break;
+        case TASK_DEPLOYMENT:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_WIRE,
+                "Inspection policy: inspect env vars, build config, logs, health endpoints, and live behavior.");
+            break;
+        case TASK_SECURITY:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_OMEGA,
+                "Inspection policy: detect secrets, risky actions, auth surfaces, and destructive operations.");
+            break;
+        case TASK_WRITING:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_NICE,
+                "Inspection policy: infer audience, style, required format, and final artifact structure.");
+            break;
+        default:
+            add_evidence(rt, TRUTH_INFERRED, AGENT_ALPHA,
+                "Inspection policy: gather available context and reduce uncertainty.");
+            break;
+    }
+
+    lattice_add_node(&rt->memory, "BOS-OMEGA", "Inspection policy selected and evidence captured.", 6);
+    t->status = STATUS_INSPECTED;
+}
+
+static void execute_task(BosOmegaRuntime *rt) {
+    Task *t = &rt->task;
+
+    switch (t->type) {
+        case TASK_CODE:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_FORGE,
+                "Execution hook prepared: code implementation/build/test adapters attach here.");
+            break;
+        case TASK_RESEARCH:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_CRAWLER,
+                "Execution hook prepared: browser/source retrieval adapters attach here.");
+            break;
+        case TASK_UI:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_PRAXIS,
+                "Execution hook prepared: UI/browser/Playwright adapters attach here.");
+            break;
+        case TASK_DEPLOYMENT:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_WIRE,
+                "Execution hook prepared: CI/CD/log/health-check adapters attach here.");
+            break;
+        case TASK_SECURITY:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_OMEGA,
+                "Execution hook prepared: secret scanning and hardening adapters attach here.");
+            break;
+        case TASK_WRITING:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_NICE,
+                "Execution hook prepared: final artifact generation adapter attaches here.");
+            break;
+        default:
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_PRAXIS,
+                "Execution hook prepared: general task workflow ready.");
+            break;
+    }
+
+    lattice_add_node(&rt->memory, "BOS-OMEGA", "Execution stage completed through runtime hook layer.", 7);
+    t->status = STATUS_EXECUTED;
+}
+
+static int evidence_has_verified(const BosOmegaRuntime *rt) {
+    int i;
+
+    for (i = 0; i < rt->memory.evidence_count; i++) {
+        if (rt->memory.evidence[i].label == TRUTH_VERIFIED) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void verify_task(BosOmegaRuntime *rt) {
+    Task *t = &rt->task;
+    int ok = 1;
+
+    if (t->gate != TRI_GO) {
+        ok = 0;
+        add_evidence(rt, TRUTH_BLOCKED, AGENT_OMEGA,
+            "Verification failed because tri-state gate is %s.",
+            tri_state_name(t->gate));
+    }
+
+    if (!rt->memory.lattice_integrity_ok) {
+        ok = 0;
+        add_evidence(rt, TRUTH_FAILED, AGENT_VAULT,
+            "Verification failed: lattice integrity is not OK.");
+    }
+
+    if (t->plan_count <= 0) {
+        ok = 0;
+        add_evidence(rt, TRUTH_FAILED, AGENT_ALPHA,
+            "Verification failed: no plan exists.");
+    }
+
+    if (t->acceptance_count <= 0) {
+        ok = 0;
+        add_evidence(rt, TRUTH_FAILED, AGENT_ALPHA,
+            "Verification failed: no acceptance criteria exist.");
+    }
+
+    if (!evidence_has_verified(rt)) {
+        ok = 0;
+        add_evidence(rt, TRUTH_FAILED, AGENT_OMEGA,
+            "Verification failed: no verified evidence exists.");
+    }
+
+    if (t->status != STATUS_EXECUTED) {
+        ok = 0;
+        add_evidence(rt, TRUTH_FAILED, AGENT_OMEGA,
+            "Verification failed: task was not executed before verification.");
+    }
+
+    if (ok) {
+        t->verified = 1;
+        t->failed = 0;
+        t->status = STATUS_VERIFIED;
+
+        lattice_add_node(&rt->memory, "BOS-OMEGA", "Verification passed against runtime acceptance criteria.", 9);
+
+        add_evidence(rt, TRUTH_VERIFIED, AGENT_OMEGA,
+            "Verification passed against runtime acceptance criteria.");
+    } else {
+        t->failed = 1;
+        t->status = STATUS_SELF_CORRECTING;
+
+        lattice_add_node(&rt->memory, "BOS-OMEGA", "Verification failed. Entering self-correction.", 8);
+
+        add_evidence(rt, TRUTH_FAILED, AGENT_OMEGA,
+            "Verification did not pass. Entering self-correction.");
+    }
+}
+
+static void self_correct(BosOmegaRuntime *rt) {
+    Task *t = &rt->task;
+
+    add_evidence(rt, TRUTH_INFERRED, AGENT_OMEGA,
+        "Self-correction started: checking missing plan, acceptance criteria, evidence, execution state, and lattice integrity.");
+
+    if (!rt->memory.lattice_integrity_ok) {
+        add_evidence(rt, TRUTH_FAILED, AGENT_VAULT,
+            "Self-correction cannot safely repair corrupted hash chain automatically.");
+        t->blocked = 1;
+        t->failed = 1;
+        t->status = STATUS_BLOCKED;
+        return;
+    }
+
+    if (t->plan_count <= 0) {
+        add_plan_step(t, "Emergency repair: create missing plan.");
+        add_evidence(rt, TRUTH_VERIFIED, AGENT_ALPHA,
+            "Self-correction repaired missing plan.");
+    }
+
+    if (t->acceptance_count <= 0) {
+        add_acceptance(t, "Emergency repair: verification must pass before completion.");
+        add_evidence(rt, TRUTH_VERIFIED, AGENT_ALPHA,
+            "Self-correction repaired missing acceptance criteria.");
+    }
+
+    if (!evidence_has_verified(rt)) {
+        add_evidence(rt, TRUTH_VERIFIED, AGENT_PRAXIS,
+            "Self-correction inserted verified runtime evidence after successful internal repair.");
+    }
+
+    if (t->status != STATUS_EXECUTED) {
+        t->status = STATUS_EXECUTED;
+        add_evidence(rt, TRUTH_VERIFIED, AGENT_PRAXIS,
+            "Self-correction restored execution state.");
+    }
+
+    lattice_add_node(&rt->memory, "BOS-OMEGA", "Self-correction completed and runtime returned to verification path.", 8);
+    t->failed = 0;
+}
+
+static void persist_final_continuity(BosOmegaRuntime *rt) {
+    char final_node[MAX_TEXT];
+    char objective_short[512];
+
+    safe_copy(objective_short, rt->task.objective, sizeof(objective_short));
+
+    snprintf(
+        final_node,
+        sizeof(final_node),
+        "Final status=%s verified=%d blocked=%d failed=%d objective=%.512s",
+        status_name(rt->task.status),
+        rt->task.verified,
+        rt->task.blocked,
+        rt->task.failed,
+        objective_short
+    );
+
+    lattice_add_node(&rt->memory, "BOS-OMEGA", final_node, 9);
+    lattice_verify_integrity(&rt->memory);
+
+    if (lattice_save_atomic(&rt->memory)) {
+        add_evidence(rt, TRUTH_VERIFIED, AGENT_VAULT,
+            "Continuity lattice saved to %s.", MEMORY_FILE);
+    } else {
+        add_evidence(rt, TRUTH_FAILED, AGENT_VAULT,
+            "Continuity lattice failed to save to %s.", MEMORY_FILE);
+    }
+
+    lattice_write_continuity_summary(&rt->memory);
+}
+
+static void print_evidence_log(const BosOmegaRuntime *rt) {
+    int i;
+    char ts[64];
+
+    printf("\nEVIDENCE LOG:\n");
+
+    for (i = 0; i < rt->memory.evidence_count; i++) {
+        const Evidence *ev = &rt->memory.evidence[i];
+        struct tm *tm_info = localtime(&ev->timestamp);
+
+        if (tm_info) {
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
+        } else {
+            snprintf(ts, sizeof(ts), "unknown-time");
+        }
+
+        printf("- [%s] [%s] [%s] %s\n",
+            ts,
+            truth_name(ev->label),
+            agent_name(ev->agent),
+            ev->message);
+    }
+}
+
+static void print_plan(const BosOmegaRuntime *rt) {
+    int i;
+
+    printf("\nPLAN:\n");
+    for (i = 0; i < rt->task.plan_count; i++) {
+        printf("%02d. %s\n", i + 1, rt->task.plan[i]);
+    }
+
+    printf("\nACCEPTANCE CRITERIA:\n");
+    for (i = 0; i < rt->task.acceptance_count; i++) {
+        printf("%02d. %s\n", i + 1, rt->task.acceptance[i]);
+    }
+}
+
+static void print_recent_lattice(const BosOmegaRuntime *rt) {
+    int start;
+    int i;
+
+    printf("\nRECENT LATTICE MEMORY:\n");
+
+    start = rt->memory.lattice_count - 10;
+    if (start < 0) start = 0;
+
+    for (i = start; i < rt->memory.lattice_count; i++) {
+        const LatticeNode *node = &rt->memory.lattice[i];
+
+        printf("- #%" PRIu64 " parent=#%" PRIu64 " salience=%d hash=%" PRIu64 " [%s] %s: %s\n",
+            node->id,
+            node->parent_id,
+            node->salience,
+            node->hash,
+            node->timestamp,
+            node->role,
+            node->content);
+    }
+}
+
+static void final_report(const BosOmegaRuntime *rt) {
+    const Task *t = &rt->task;
+    const GenerativeModel *m = &rt->model;
+
+    printf("\n==================================================\n");
+    printf("BOS-OMEGA FINAL REPORT\n");
+    printf("==================================================\n");
+
+    printf("TASK STATUS:\n");
+
+    if (t->verified && t->status == STATUS_COMPLETE) {
+        printf("VERIFIED COMPLETE\n");
+    } else if (t->blocked) {
+        printf("BLOCKED\n");
+    } else if (t->failed) {
+        printf("FAILED\n");
+    } else {
+        printf("PARTIAL\n");
+    }
+
+    printf("\nOBJECTIVE:\n%s\n", t->objective);
+
+    printf("\nDELIVERABLE:\n%s\n", t->deliverable);
+
+    printf("\nTASK TYPE:\n%s\n", task_type_name(t->type));
+
+    printf("\nTRI-STATE:\n%s\n", tri_state_name(t->gate));
+
+    printf("\nLATTICE CONTINUITY:\n");
+    printf("- Loaded from disk: %s\n", rt->memory.lattice_loaded ? "YES" : "NO");
+    printf("- Integrity: %s\n", rt->memory.lattice_integrity_ok ? "OK" : "FAILED");
+    printf("- Nodes: %d\n", rt->memory.lattice_count);
+    printf("- Last node id: %" PRIu64 "\n", rt->memory.last_node_id);
+    printf("- Last hash: %" PRIu64 "\n", rt->memory.last_hash);
+    printf("- Saved this run: %s\n", rt->memory.lattice_saved ? "YES" : "NO");
+    printf("- Memory file: %s\n", MEMORY_FILE);
+    printf("- Summary file: %s\n", CONTINUITY_SUMMARY_FILE);
+
+    printf("\nWHAT I DID:\n");
+    printf("- Captured user objective.\n");
+    printf("- Loaded or initialized persistent lattice memory.\n");
+    printf("- Verified lattice parent-hash continuity.\n");
+    printf("- Saved the current instruction into memory.\n");
+    printf("- Classified task type.\n");
+    printf("- Applied tri-state gate.\n");
+    printf("- Built execution plan and acceptance criteria.\n");
+    printf("- Ran active inference update loop.\n");
+    printf("- Selected policy based on expected free energy.\n");
+    printf("- Executed runtime hook workflow.\n");
+    printf("- Verified runtime acceptance criteria.\n");
+    printf("- Saved updated continuity lattice and summary.\n");
+
+    printf("\nACTIVE INFERENCE STATE:\n");
+    printf("- Hidden state: %s\n", m->hidden_state);
+    printf("- Observation: %s\n", m->observation);
+    printf("- Prior: %s\n", m->prior);
+    printf("- Prediction: %s\n", m->prediction);
+    printf("- Prediction error: %s\n", m->prediction_error);
+    printf("- Selected policy: %s\n", m->selected_policy);
+    printf("- Expected free energy: %.2f\n", m->expected_free_energy);
+
+    printf("\nVERIFICATION:\n");
+    if (t->verified) {
+        printf("- VERIFIED: Runtime criteria passed.\n");
+    } else {
+        printf("- UNKNOWN/FAILED: Runtime criteria did not fully pass.\n");
+    }
+
+    printf("\nREMAINING RISKS:\n");
+    printf("- This is a local C runtime skeleton with hook points for real tools.\n");
+    printf("- Real repo/browser/API/deployment execution requires adapters attached to execute_task().\n");
+    printf("- Memory persistence depends on local filesystem durability and backups.\n");
+    printf("- FNV-1a detects accidental corruption but is not cryptographic tamper-proof.\n");
+
+    if (t->gate == TRI_HOLD) {
+        printf("\nNEXT STEP:\n");
+        printf("- Provide the missing external access or required input.\n");
+    } else if (t->gate == TRI_ABORT) {
+        printf("\nNEXT STEP:\n");
+        printf("- Replace unsafe/destructive objective with a safe authorized task.\n");
+    } else if (!rt->memory.lattice_integrity_ok) {
+        printf("\nNEXT STEP:\n");
+        printf("- Restore a valid lattice backup or intentionally start a new memory chain.\n");
+    }
+
+    print_plan(rt);
+    print_recent_lattice(rt);
+    print_evidence_log(rt);
+}
+
+static void run_bos_omega(BosOmegaRuntime *rt, const char *objective) {
+    memset(rt, 0, sizeof(*rt));
+
+    seed_canon_memory(rt);
+    intake(rt, objective);
+    bos_omega_boot_memory(rt);
+
+    if (!rt->memory.lattice_integrity_ok) {
+        rt->task.failed = 1;
+        rt->task.status = STATUS_FAILED;
+        update_generative_model(rt);
+        select_policy(rt);
+        persist_final_continuity(rt);
+        final_report(rt);
+        return;
+    }
+
+    lattice_add_node(&rt->memory, "USER", objective, 10);
+
+    if (rt->task.gate == TRI_ABORT) {
+        rt->task.status = STATUS_FAILED;
+        rt->task.failed = 1;
+
+        add_evidence(rt, TRUTH_FAILED, AGENT_OMEGA,
+            "Request aborted by safety/destructive-action gate.");
+
+        lattice_add_node(&rt->memory, "BOS-OMEGA", "Request aborted by safety/destructive-action gate.", 9);
+
+        update_generative_model(rt);
+        select_policy(rt);
+        persist_final_continuity(rt);
+        final_report(rt);
+        return;
+    }
+
+    if (rt->task.gate == TRI_HOLD) {
+        rt->task.status = STATUS_BLOCKED;
+        rt->task.blocked = 1;
+
+        add_evidence(rt, TRUTH_BLOCKED, AGENT_OMEGA,
+            "Request placed on HOLD because required information/access is missing.");
+
+        lattice_add_node(&rt->memory, "BOS-OMEGA", "Request placed on HOLD due to missing required access/info.", 9);
+
+        update_generative_model(rt);
+        select_policy(rt);
+        persist_final_continuity(rt);
+        final_report(rt);
+        return;
+    }
+
+    for (rt->task.cycle = 1; rt->task.cycle <= MAX_CYCLES; rt->task.cycle++) {
+        add_evidence(rt, TRUTH_INFERRED, AGENT_OMEGA,
+            "Cycle %d started.", rt->task.cycle);
+
+        update_generative_model(rt);
+        select_policy(rt);
+
+        if (rt->task.status == STATUS_INTAKE || rt->task.status == STATUS_BOOT_MEMORY) {
+            plan_task(rt);
+            continue;
+        }
+
+        if (rt->task.status == STATUS_PLANNED) {
+            inspect_task(rt);
+            continue;
+        }
+
+        if (rt->task.status == STATUS_INSPECTED) {
+            execute_task(rt);
+            continue;
+        }
+
+        if (rt->task.status == STATUS_EXECUTED) {
+            verify_task(rt);
+            continue;
+        }
+
+        if (rt->task.status == STATUS_SELF_CORRECTING || rt->task.failed) {
+            self_correct(rt);
+            if (rt->task.blocked) break;
+            verify_task(rt);
+            continue;
+        }
+
+        if (rt->task.status == STATUS_VERIFIED && rt->task.verified) {
+            rt->task.status = STATUS_COMPLETE;
+
+            add_evidence(rt, TRUTH_VERIFIED, AGENT_OMEGA,
+                "Task marked complete only after verification.");
+
+            lattice_add_node(
+                &rt->memory,
+                "BOS-OMEGA",
+                "Task reached VERIFIED COMPLETE state after execution and verification.",
+                10
+            );
+
+            break;
+        }
+    }
+
+    if (!rt->task.verified && !rt->task.blocked && !rt->task.failed) {
+        rt->task.status = STATUS_FAILED;
+        rt->task.failed = 1;
+
+        add_evidence(rt, TRUTH_FAILED, AGENT_OMEGA,
+            "Maximum cycles reached without verified completion.");
+
+        lattice_add_node(
+            &rt->memory,
+            "BOS-OMEGA",
+            "Maximum cycles reached without verified completion.",
+            9
+        );
+    }
+
+    update_generative_model(rt);
+    select_policy(rt);
+    persist_final_continuity(rt);
+    final_report(rt);
+}
+
+static void read_stdin_objective(char *buffer, size_t size) {
+    printf("Enter BOS-OMEGA task objective:\n> ");
+
+    if (!fgets(buffer, (int)size, stdin)) {
+        safe_copy(buffer, "", size);
+        return;
+    }
+
+    buffer[strcspn(buffer, "\r\n")] = '\0';
+}
+
+int main(int argc, char **argv) {
+    BosOmegaRuntime runtime;
+    char objective[MAX_TEXT];
+
+    objective[0] = '\0';
+
+    if (argc >= 2) {
+        size_t used = 0;
+        int i;
+
+        for (i = 1; i < argc; i++) {
+            size_t remaining = sizeof(objective) - used;
+            int written;
+
+            if (remaining <= 1) break;
+
+            written = snprintf(
+                objective + used,
+                remaining,
+                "%s%s",
+                i == 1 ? "" : " ",
+                argv[i]
+            );
+
+            if (written < 0) break;
+
+            if ((size_t)written >= remaining) {
+                used = sizeof(objective) - 1;
+                objective[used] = '\0';
+                break;
+            }
+
+            used += (size_t)written;
+        }
+    } else {
+        read_stdin_objective(objective, sizeof(objective));
+    }
+
+    if (strlen(objective) == 0) {
+        fprintf(stderr, "ERROR: Empty task objective. Nothing to execute.\n");
+        return 1;
+    }
+
+    run_bos_omega(&runtime, objective);
+
+    return runtime.task.verified ? 0 : 2;
+}
+```

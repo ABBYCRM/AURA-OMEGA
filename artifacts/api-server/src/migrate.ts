@@ -1,0 +1,244 @@
+import { pool } from "@workspace/db";
+import { logger } from "./lib/logger";
+
+const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "agents" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "name" text NOT NULL,
+  "role" text NOT NULL,
+  "description" text,
+  "status" text DEFAULT 'idle' NOT NULL,
+  "color" text NOT NULL,
+  "avatar_initials" text,
+  "model" text,
+  "context_used" integer DEFAULT 0 NOT NULL,
+  "context_max" integer DEFAULT 128000 NOT NULL,
+  "capabilities" text[] DEFAULT '{}' NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "channels" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "name" text NOT NULL,
+  "type" text DEFAULT 'general' NOT NULL,
+  "description" text,
+  "unread_count" integer DEFAULT 0 NOT NULL,
+  "last_activity" timestamp,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "messages" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "channel_id" integer NOT NULL,
+  "agent_id" integer,
+  "agent_name" text,
+  "agent_color" text,
+  "content" text NOT NULL,
+  "message_type" text DEFAULT 'user' NOT NULL,
+  "metadata" text,
+  "timestamp" timestamp DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "tasks" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "title" text NOT NULL,
+  "description" text,
+  "agent_id" integer,
+  "agent_name" text,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "priority" text DEFAULT 'medium' NOT NULL,
+  "progress" integer DEFAULT 0 NOT NULL,
+  "channel_id" integer,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp
+);
+
+CREATE TABLE IF NOT EXISTS "monologue_lines" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "agent_id" integer NOT NULL,
+  "text" text NOT NULL,
+  "type" text DEFAULT 'thought' NOT NULL,
+  "timestamp" timestamp DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "tool_calls" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "agent_id" integer NOT NULL,
+  "tool_name" text NOT NULL,
+  "args" text,
+  "result" text,
+  "status" text DEFAULT 'pending' NOT NULL,
+  "started_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp
+);
+
+CREATE TABLE IF NOT EXISTS "agent_commands" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "from_agent_id" integer NOT NULL,
+  "to_agent_id" integer,
+  "command" text NOT NULL,
+  "payload" text,
+  "priority" text DEFAULT 'normal' NOT NULL,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "result" text,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp
+);
+
+CREATE TABLE IF NOT EXISTS "cron_jobs" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "agent_id" integer NOT NULL,
+  "name" text NOT NULL,
+  "schedule" text NOT NULL,
+  "task" text NOT NULL,
+  "payload" text,
+  "enabled" boolean DEFAULT true NOT NULL,
+  "last_run_at" timestamp,
+  "next_run_at" timestamp,
+  "run_count" integer DEFAULT 0 NOT NULL,
+  "last_result" text,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "agent_memory" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "agent_id" integer NOT NULL,
+  "agent_name" text,
+  "key" text,
+  "content" text NOT NULL,
+  "tags" text,
+  "embedding" text,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+
+-- Backfill the embedding column on databases created before semantic memory.
+ALTER TABLE "agent_memory" ADD COLUMN IF NOT EXISTS "embedding" text;
+
+-- Dispatch observability: model + grounding proof per directive (Dispatch panel).
+ALTER TABLE "agent_commands" ADD COLUMN IF NOT EXISTS "model" text;
+ALTER TABLE "agent_commands" ADD COLUMN IF NOT EXISTS "grounding_chars" integer;
+ALTER TABLE "agent_commands" ADD COLUMN IF NOT EXISTS "grounding_hash" text;
+
+-- Reclassify historical restart interruptions: a deploy/redeploy killing
+-- in-flight work was previously marked 'failed', polluting the failure view as
+-- if the AURA failed. Re-tag them 'interrupted' so they stop counting as agent
+-- failures (the recovery routine now writes 'interrupted' directly).
+UPDATE "agent_commands" SET "status" = 'interrupted'
+  WHERE "status" = 'failed' AND "result" LIKE 'Interrupted by server restart%';
+
+CREATE TABLE IF NOT EXISTS "vault_secrets" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "name" text NOT NULL UNIQUE,
+  "description" text,
+  "ciphertext" text NOT NULL,
+  "iv" text NOT NULL,
+  "auth_tag" text NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "attachments" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "filename" text NOT NULL,
+  "mime_type" text NOT NULL,
+  "kind" text DEFAULT 'other' NOT NULL,
+  "size_bytes" integer DEFAULT 0 NOT NULL,
+  "data" text NOT NULL,
+  "extracted_text" text,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+
+-- Indexes for the hot read paths the dashboard polls every few seconds. Without
+-- these, each poll seq-scans + sorts and holds a pool connection longer, which
+-- (under concurrent orchestration writes) caused reads to hang and return empty.
+CREATE INDEX IF NOT EXISTS "messages_channel_ts_idx" ON "messages" ("channel_id", "timestamp");
+CREATE INDEX IF NOT EXISTS "agent_commands_created_idx" ON "agent_commands" ("created_at");
+CREATE INDEX IF NOT EXISTS "tool_calls_agent_idx" ON "tool_calls" ("agent_id");
+CREATE INDEX IF NOT EXISTS "tasks_status_idx" ON "tasks" ("status");
+-- Social posting log — powers the per-platform daily cap + spacing limiter.
+CREATE TABLE IF NOT EXISTS "social_posts" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "platform" text NOT NULL,
+  "account" text,
+  "permalink" text,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "social_posts_platform_created_idx" ON "social_posts" ("platform", "created_at");
+
+-- WORLD-00: single-row persistent state for Aura's living world (her position,
+-- direction, chapter, path history, breadcrumb clues, enabled flag). Only ONE
+-- row (id=1). Stores NO task content — world/render state only.
+CREATE TABLE IF NOT EXISTS "world_state" (
+  "id" integer PRIMARY KEY DEFAULT 1,
+  "chapter" integer DEFAULT 0 NOT NULL,
+  "step" integer DEFAULT 0 NOT NULL,
+  "hero_x" double precision DEFAULT 75 NOT NULL,
+  "hero_y" double precision DEFAULT 4 NOT NULL,
+  "direction" text DEFAULT 'down' NOT NULL,
+  "trail" text DEFAULT '[]' NOT NULL,
+  "last_caption" text,
+  "stopped" boolean DEFAULT false NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
+);
+INSERT INTO "world_state" ("id") VALUES (1) ON CONFLICT ("id") DO NOTHING;
+`;
+
+const SEED_AGENTS = `
+INSERT INTO agents (name, role, description, status, color, avatar_initials, model, capabilities)
+VALUES
+  ('ABBY',   'Orchestrator',  'Master orchestrator and directive router',       'idle', '#00e5ff', 'AB', 'x-ai/grok-4.3',         ARRAY['orchestration','planning','routing']),
+  ('AURA-1', 'Code Executor', 'Code generation and execution specialist',       'idle', '#bf00ff', 'C1', 'qwen/qwen3.7-plus',      ARRAY['code','execution','debugging']),
+  ('AURA-2', 'Browser Agent', 'Web browsing and scraping via Steel',            'idle', '#0066ff', 'C2', 'x-ai/grok-build-0.1',   ARRAY['browser','scraping','research']),
+  ('AURA-3', 'Memory & RAG',  'Long-term memory and retrieval',                 'idle', '#00cc88', 'C3', 'qwen/qwen3.7-max',       ARRAY['memory','rag','search']),
+  ('AURA-4', 'API Connector', 'External API integration and automation',        'idle', '#ff6b00', 'C4', 'x-ai/grok-4.20',         ARRAY['api','integration','automation']),
+  ('MR.NICE','Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'MN', 'qwen/qwen3.6-plus',      ARRAY['social','communications','engagement'])
+`;
+
+const SEED_CHANNELS = `
+INSERT INTO channels (name, type, description)
+VALUES
+  ('general', 'general', 'General swarm communications'),
+  ('abby',    'agent',   'ABBY orchestrator channel'),
+  ('aura-1',  'agent',   'AURA-1 code executor channel'),
+  ('aura-2',  'agent',   'AURA-2 browser agent channel'),
+  ('aura-3',  'agent',   'AURA-3 memory channel'),
+  ('aura-4',  'agent',   'AURA-4 API connector channel'),
+  ('mr-nice', 'agent',   'MR.NICE social agent channel')
+`;
+
+// Real executable tools each agent can call (mirrors AGENT_TOOLS in tools.ts).
+// Synced into agents.capabilities so the dashboard Inspector reflects the tools
+// each AURA actually wields.
+const AGENT_CAPABILITIES: Record<number, string[]> = {
+  1: ["web_scrape", "web_screenshot", "http_request", "code_exec", "memory_write", "memory_search"],
+  2: ["code_exec", "http_request", "web_scrape", "memory_search", "memory_write"],
+  3: ["web_scrape", "web_screenshot", "http_request", "memory_search", "memory_write"],
+  4: ["memory_write", "memory_search", "web_scrape", "http_request"],
+  5: ["http_request", "web_scrape", "code_exec", "memory_search", "memory_write"],
+  6: ["web_scrape", "http_request", "memory_search", "memory_write"],
+};
+
+export async function runMigrations(): Promise<void> {
+  const client = await pool.connect();
+  try {
+    logger.info("Running startup migrations...");
+    await client.query(SCHEMA_SQL);
+    logger.info("Schema ready");
+
+    const { rows } = await client.query("SELECT COUNT(*) AS n FROM agents");
+    if (parseInt(rows[0].n, 10) === 0) {
+      await client.query(SEED_AGENTS);
+      await client.query(SEED_CHANNELS);
+      logger.info("Default agents and channels seeded");
+    }
+
+    // Idempotently sync each agent's real tool capabilities.
+    for (const [id, caps] of Object.entries(AGENT_CAPABILITIES)) {
+      await client.query("UPDATE agents SET capabilities = $1 WHERE id = $2", [caps, Number(id)]);
+    }
+  } catch (err) {
+    logger.error({ err }, "Migration failed — continuing anyway");
+  } finally {
+    client.release();
+  }
+}

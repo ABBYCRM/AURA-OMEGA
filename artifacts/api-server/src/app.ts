@@ -1,0 +1,100 @@
+import express, { type Express } from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import pinoHttp from "pino-http";
+import router from "./routes";
+import { logger } from "./lib/logger";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+
+const app: Express = express();
+
+app.use(
+  pinoHttp({
+    logger,
+    serializers: {
+      req(req) {
+        return {
+          id: req.id,
+          method: req.method,
+          url: req.url?.split("?")[0],
+        };
+      },
+      res(res) {
+        return {
+          statusCode: res.statusCode,
+        };
+      },
+    },
+  }),
+);
+// CORS: the dashboard is served same-origin in production, so cross-origin
+// browser access isn't needed. When ALLOWED_ORIGINS is set (comma-separated),
+// lock to that allowlist with credentials so a stray site can't read the API in
+// a browser. Unset → permissive (dev / unconfigured deploys), unchanged behavior.
+const allowedOrigins = (process.env["ALLOWED_ORIGINS"] ?? "")
+  .split(",").map((o) => o.trim()).filter(Boolean);
+app.use(
+  allowedOrigins.length
+    ? cors({ origin: allowedOrigins, credentials: true })
+    : cors(),
+);
+app.use(cookieParser());
+const uploadMb = Math.max(1, Number(process.env["AURA_MAX_UPLOAD_MB"] ?? 100));
+const bodyLimit = `${Math.ceil(uploadMb * 1.4)}mb`;
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
+
+app.use("/api", router);
+
+// Always-available health endpoint (used by Render / load-balancers).
+app.get("/healthz", (_req, res) => {
+  res.json({ status: "ok", service: "aura-omega-api" });
+});
+
+// In production, serve the Vite-built frontend if it was bundled into the image.
+const __filename_app = fileURLToPath(import.meta.url);
+const __dirname_app = path.dirname(__filename_app);
+const staticPath = path.join(__dirname_app, "..", "..", "aura-omega-ui", "dist", "public");
+const indexHtml = path.join(staticPath, "index.html");
+const hasFrontend =
+  process.env["NODE_ENV"] === "production" && fs.existsSync(indexHtml);
+
+if (hasFrontend) {
+  app.use(
+    express.static(staticPath, {
+      setHeaders: (res, filePath) => {
+        // The SPA entry point must NEVER be cached: the browser has to revalidate
+        // it on every load so a new deploy is picked up immediately (otherwise a
+        // tab keeps serving a stale bundle — the "old build" ghost). Hashed assets
+        // are content-addressed (the filename changes when the bytes change), so
+        // they're safe to cache forever.
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache");
+        } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    }),
+  );
+  app.get("/*path", (req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    // Missing static assets (paths with a file extension) should 404, not
+    // fall back to the SPA shell — otherwise stale asset requests get HTML 200.
+    if (path.extname(req.path)) return next();
+    // The SPA shell is served for every app route; it must revalidate too so a
+    // deep-link/refresh always lands the newest deployed bundle.
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(indexHtml, (err) => {
+      if (err) next();
+    });
+  });
+} else {
+  // No frontend bundle (dev, or build missing) — expose a health root.
+  app.get("/", (_req, res) => {
+    res.json({ status: "ok", service: "aura-omega-api" });
+  });
+}
+
+export default app;
