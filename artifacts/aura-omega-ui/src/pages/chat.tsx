@@ -323,23 +323,44 @@ export default function ChatPage() {
     URL.revokeObjectURL(url);
   };
 
+  const copyThread = () => {
+    if (!messages.length) { toast("Nothing to copy yet."); return; }
+    const rows = messages
+      .filter((m) => (m.content ?? "").trim())
+      .map((m) => {
+        const role = m.messageType === "user" ? "USER" : (m.agentName || "ASSISTANT").toUpperCase();
+        return `${role} [${new Date(m.timestamp).toLocaleString()}]\n${m.content}`;
+      });
+    navigator.clipboard?.writeText(rows.join("\n\n---\n\n")).then(() => {
+      toast.success("Thread copied to clipboard.");
+    }).catch(() => toast.error("Clipboard access denied."));
+  };
+
   const visibleMessages = messages.filter((m) => (m.content ?? "").trim().length > 0);
 
   return (
     <div className="flex w-full h-full bg-background text-foreground overflow-hidden">
-      {/* ── Conversation sidebar (drawer on mobile) ── */}
+      {/* ── Conversation sidebar (slide-over drawer on all screen sizes) ── */}
       {sidebarOpen && (
-        <div className="md:hidden fixed inset-0 bg-black/50 z-30" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+        <div className="fixed inset-0 bg-black/50 z-30" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       )}
       <aside
         className={cn(
-          "w-72 shrink-0 bg-card/60 border-r border-card-border flex flex-col z-40",
-          "md:static md:translate-x-0 transition-transform duration-200",
-          "fixed inset-y-0 left-0",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
+          "w-72 shrink-0 bg-card border-r border-card-border flex flex-col z-40",
+          "fixed inset-y-0 left-0 transition-transform duration-200 shadow-2xl",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
         aria-label="Conversations"
       >
+        <div className="p-3 border-b border-card-border flex items-center gap-2">
+          <div className="flex items-center gap-1.5 flex-1">
+            <MessageSquare className="w-4 h-4 text-primary" />
+            <span className="text-sm font-semibold">Chats</span>
+          </div>
+          <button onClick={() => setSidebarOpen(false)} aria-label="Close menu" className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
         <div className="p-3">
           <button
             onClick={newChat}
@@ -401,14 +422,49 @@ export default function ChatPage() {
             })
           )}
         </nav>
+
+        {/* Export section — actions for the active conversation */}
+        <div className="p-3 border-t border-card-border">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2">
+            {activeChannel ? `Export: ${activeChannel.name}` : "Export"}
+          </div>
+          <div className="space-y-0.5">
+            <button
+              onClick={() => { copyThread(); setSidebarOpen(false); }}
+              disabled={!activeId || visibleMessages.length === 0}
+              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+            >
+              <Copy className="w-4 h-4" /> Copy thread
+            </button>
+            <button
+              onClick={() => { exportConvo("txt"); setSidebarOpen(false); }}
+              disabled={!activeId || visibleMessages.length === 0}
+              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+            >
+              <Download className="w-4 h-4" /> Download .txt
+            </button>
+            <button
+              onClick={() => { exportConvo("json"); setSidebarOpen(false); }}
+              disabled={!activeId || visibleMessages.length === 0}
+              className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+            >
+              <Download className="w-4 h-4" /> Download .json
+            </button>
+          </div>
+        </div>
       </aside>
 
       {/* ── Main column ── */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
         <header className="h-14 shrink-0 border-b border-card-border flex items-center gap-3 px-4">
-          <button onClick={() => setSidebarOpen(true)} aria-label="Open conversations" className="md:hidden p-2 -ml-2 text-muted-foreground hover:text-foreground">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open conversations"
+            className="flex items-center gap-1.5 p-2 -ml-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors"
+          >
             <Menu className="w-5 h-5" />
+            <span className="text-sm font-medium hidden sm:inline">Chats</span>
           </button>
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <Bot className="w-5 h-5 text-primary shrink-0" />
