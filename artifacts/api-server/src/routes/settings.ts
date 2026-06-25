@@ -18,6 +18,8 @@ export interface AuraRuntimeSettings {
   branchBeforeGithubPush: boolean;
   noDestructiveProductionActionWithoutApproval: boolean;
   mvpGovernorRequired: boolean;
+  /** Custom system personality — prepended to every agent's system prompt when set. */
+  systemPersonality?: string;
 }
 
 const defaults: AuraRuntimeSettings = {
@@ -35,7 +37,7 @@ const defaults: AuraRuntimeSettings = {
   mvpGovernorRequired: true,
 };
 
-function readSettings(): AuraRuntimeSettings {
+export function readSettings(): AuraRuntimeSettings {
   try {
     const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Partial<AuraRuntimeSettings>;
     return { ...defaults, ...parsed };
@@ -50,6 +52,9 @@ function sanitize(input: Record<string, unknown>): AuraRuntimeSettings {
   next.mvpGovernorRequired = true;
   next.requireVerificationBeforeDone = true;
   next.neverShowSecretsToModel = true;
+  if (typeof next.systemPersonality === "string") {
+    next.systemPersonality = next.systemPersonality.slice(0, 32_000);
+  }
   return next;
 }
 
@@ -61,6 +66,21 @@ router.put("/settings/runtime", (req, res) => {
   const settings = sanitize(req.body ?? {});
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   res.json({ settings, saved: true });
+});
+
+router.get("/settings/personality", (_req, res) => {
+  const { systemPersonality } = readSettings();
+  res.json({ systemPersonality: systemPersonality ?? "" });
+});
+
+router.put("/settings/personality", (req, res) => {
+  const text = typeof req.body?.systemPersonality === "string"
+    ? req.body.systemPersonality.slice(0, 32_000)
+    : "";
+  const current = readSettings();
+  const updated = { ...current, systemPersonality: text };
+  fs.writeFileSync(settingsPath, JSON.stringify(updated, null, 2));
+  res.json({ systemPersonality: updated.systemPersonality, saved: true });
 });
 
 export default router;
