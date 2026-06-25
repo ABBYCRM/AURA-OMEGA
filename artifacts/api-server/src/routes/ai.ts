@@ -246,13 +246,13 @@ const CHAT_HISTORY_LIMIT = 16;
 export const ABBY_ID = 1;
 export const ABBY_DEFAULT_MODEL = "x-ai/grok-4.3";
 
-// ABBY must ALWAYS run on a Grok (x-ai/) model — it carries the persona best.
-// Any non-Grok model (from the DB or a request override) is forced back to Grok.
+// When BOS Omega (BUDDY) is configured it IS the primary runtime — respect the
+// model it advertises. Only force Grok when BUDDY is not configured.
 export function resolveModel(agentId: number, agentModel: string | null | undefined, override: unknown): string {
   const candidate = (typeof override === "string" && override.trim())
     ? override
     : (agentModel ?? ABBY_DEFAULT_MODEL);
-  if (agentId === ABBY_ID && !candidate.startsWith("x-ai/")) {
+  if (agentId === ABBY_ID && !candidate.startsWith("x-ai/") && !buddyConfigured()) {
     return ABBY_DEFAULT_MODEL;
   }
   return candidate;
@@ -298,9 +298,36 @@ export function openrouterHeaders() {
     "Content-Type": "application/json",
     "HTTP-Referer": "https://aura-omega-ui.abbyaura.io",
     "X-Title": "AURA-OMEGA",
-    // Adds Helicone-Auth (and logging hints) only when Helicone is configured;
-    // otherwise this spreads nothing.
     ...heliconeHeaders(),
+  };
+}
+
+/** Headers for calling BOS Omega (BUDDY) — the primary runtime when configured. */
+export function buddyHeaders() {
+  const key = process.env["BUDDY_API_KEY"];
+  if (!key) throw new Error("BUDDY_API_KEY is not set");
+  return {
+    "Authorization": `Bearer ${key}`,
+    "Content-Type": "application/json",
+    ...heliconeHeaders(),
+  };
+}
+
+/** Base URL + auth headers for whichever LLM backend is active right now.
+ *  BOS Omega (BUDDY) takes priority when both keys are configured. */
+export function activeLlm(): { base: string; headers: Record<string, string>; model: (agentModel: string) => string } {
+  if (buddyConfigured()) {
+    const bosModel = process.env["BUDDY_MODEL"] ?? "bos-omega";
+    return {
+      base: process.env["BUDDY_BASE_URL"]!.replace(/\/$/, ""),
+      headers: buddyHeaders(),
+      model: () => bosModel,
+    };
+  }
+  return {
+    base: OPENROUTER_BASE,
+    headers: openrouterHeaders(),
+    model: (m) => m,
   };
 }
 
@@ -611,11 +638,12 @@ router.post("/ai/chat", async (req, res) => {
         "If the request needs real or current information you don't already have, prefer dispatch=true. " +
         "ALSO dispatch=true whenever the request asks you to PRODUCE or SAVE a downloadable file/artifact (deck, report, PDF, CSV, document, code file), run code, fill/submit a form, or do any multi-step build — those need tools (save_artifact, code, web) that only the AURAs have, so answering inline cannot actually create a downloadable file. Only answer inline (dispatch=false) for pure conversation or a quick factual answer that needs no tool and no saved file. " +
         "The `reply` must be ABBY's actual answer to the operator AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
-      const decRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      const llm = activeLlm();
+      const decRes = await fetch(`${llm.base}/chat/completions`, {
         method: "POST",
-        headers: openrouterHeaders(),
+        headers: llm.headers,
         body: JSON.stringify({
-          model,
+          model: llm.model(model),
           messages: [{ role: "system", content: decisionSystem }, ...history],
           stream: false,
           max_tokens: 800,
@@ -675,11 +703,12 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const orRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    const llm = activeLlm();
+    const orRes = await fetch(`${llm.base}/chat/completions`, {
       method: "POST",
-      headers: openrouterHeaders(),
+      headers: llm.headers,
       body: JSON.stringify({
-        model,
+        model: llm.model(model),
         stream: true,
         messages: chatMessages,
         max_tokens: 700,
@@ -690,10 +719,11 @@ router.post("/ai/chat", async (req, res) => {
       const errText = await orRes.text();
       req.log.error({ status: orRes.status, errText }, "OpenRouter error");
       if (await tryBuddyFallback(`openrouter ${orRes.status}`)) return;
+      const backend = buddyConfigured() ? "BOS Omega" : "OpenRouter";
       const hint =
         orRes.status === 402
-          ? "OpenRouter is out of credits. Add credits, or configure BUDDY_API_KEY/BUDDY_BASE_URL for automatic fallback."
-          : `OpenRouter error ${orRes.status}: ${errText.slice(0, 200)}`;
+          ? `${backend} is out of credits. Add credits or check BUDDY_API_KEY/BUDDY_BASE_URL.`
+          : `${backend} error ${orRes.status}: ${errText.slice(0, 200)}`;
       sendEvent({ error: hint });
       sendEvent({ done: true });
       res.end(); return;

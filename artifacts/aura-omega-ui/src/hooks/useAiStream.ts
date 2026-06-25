@@ -37,7 +37,7 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
     setState({ streaming: true, tokens: "", agentName: null, agentId: opts.agentId ?? null, model: null, error: null });
 
     try {
-      const res = await fetch(resolveApiUrl("/api/discord/chat"), {
+      const res = await fetch(resolveApiUrl("/api/ai/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: abort.signal,
