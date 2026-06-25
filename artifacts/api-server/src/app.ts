@@ -46,21 +46,19 @@ const bodyLimit = `${Math.ceil(uploadMb * 1.4)}mb`;
 app.use(express.json({ limit: bodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
-app.use("/api", router);
-
-// Always-available health endpoint (used by Render / load-balancers).
+// Health + version endpoints (before auth router so they're always open).
 app.get("/healthz", (_req, res) => {
   res.json({ status: "ok", service: "aura-omega-api" });
 });
-
-// Version endpoint — bump DEPLOY_VERSION in render.yaml to confirm a fresh deploy.
-app.get("/api/version", (_req, res) => {
+app.get("/version", (_req, res) => {
   res.json({
     version: process.env["DEPLOY_VERSION"] ?? "dev",
     service: "aura-omega-api",
     timestamp: new Date().toISOString(),
   });
 });
+
+app.use("/api", router);
 
 // In production, serve the Vite-built frontend if it was bundled into the image.
 const __filename_app = fileURLToPath(import.meta.url);
