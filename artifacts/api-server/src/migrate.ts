@@ -232,8 +232,14 @@ const AGENT_CAPABILITIES: Record<number, string[]> = {
 };
 
 export async function runMigrations(): Promise<void> {
-  const client = await pool.connect();
+  // The connection acquire is INSIDE the try: if the database is unreachable
+  // (deleted free-tier DB, cold start, transient network), pool.connect() must
+  // NOT throw out of here — that would propagate to index.ts, hit process.exit(1),
+  // and prevent the server from ever listening, pinning Render to the stale
+  // last-good build. Boot must always succeed; the DB simply migrates later.
+  let client: Awaited<ReturnType<typeof pool.connect>> | undefined;
   try {
+    client = await pool.connect();
     logger.info("Running startup migrations...");
     await client.query(SCHEMA_SQL);
     logger.info("Schema ready");
@@ -248,8 +254,8 @@ export async function runMigrations(): Promise<void> {
       await client.query("UPDATE agents SET capabilities = $1 WHERE id = $2", [caps, Number(id)]);
     }
   } catch (err) {
-    logger.error({ err }, "Migration failed — continuing anyway");
+    logger.error({ err }, "Migration failed — server will continue booting without a completed migration");
   } finally {
-    client.release();
+    client?.release();
   }
 }

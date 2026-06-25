@@ -4,9 +4,17 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
+// DO NOT throw at module load if DATABASE_URL is missing. A hard throw here
+// bricks the entire process at import time — which on Render means the new
+// deploy exits before it can listen, so Render keeps the last-good (stale)
+// build live indefinitely. Instead, warn and let the server boot; individual
+// DB queries fail (and are caught by route handlers) until the database is
+// reachable. The pg Pool connects lazily on first query, so constructing it
+// with an undefined/placeholder connection string is safe.
 if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[db] DATABASE_URL is not set — DB-backed routes will fail until it is provided. Server will still boot.",
   );
 }
 
