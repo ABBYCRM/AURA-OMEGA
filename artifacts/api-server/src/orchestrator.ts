@@ -37,6 +37,7 @@ import {
   buildVaultCard,
 } from "./routes/ai";
 import { isSwarmPaused } from "./routes/swarm";
+import { readSettings } from "./routes/settings";
 import {
   steelScrape,
   getOpenAiToolsForAgent,
@@ -378,7 +379,8 @@ export async function executeAgentCommand(opts: {
     const toolGuide = toolNames.length
       ? `\n\nYou are an autonomous tool-using agent. Call tools to gather real data and perform real work instead of guessing — chain multiple calls when needed, and avoid repeating a call that already returned (it wastes time and budget). When the directive is fully satisfied, stop calling tools and reply with your final concrete result (no preamble).${buildCapabilityCard(agent.id)}`
       : "";
-    const system = persona + toolGuide + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
+    const _agentPersonality = readSettings().systemPersonality?.trim() ?? "";
+    const system = (_agentPersonality ? _agentPersonality + "\n\n" : "") + persona + toolGuide + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
 
     const messages: ChatMessage[] = [
       { role: "system", content: system },
@@ -700,7 +702,8 @@ export async function orchestrateGoal(opts: {
     const roster = auras
       .map((c) => `${c.id}=${c.name} (${c.role ?? "agent"})`)
       .join(", ");
-    const planSystem = (AGENT_PERSONAS[ABBY_ID] ?? "You are ABBY, the swarm orchestrator.") + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
+    const _planPersonality = readSettings().systemPersonality?.trim() ?? "";
+    const planSystem = (_planPersonality ? _planPersonality + "\n\n" : "") + (AGENT_PERSONAS[ABBY_ID] ?? "You are ABBY, the swarm orchestrator.") + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
     const planUser = `Operator goal: "${goal}"
 ${sourceContext && sourceContext.trim() ? `\nThe operator provided this source material to work from (decompose against THIS; the AURAs will receive it too — do not tell them to search memory for it):\n"""\n${sourceContext.slice(0, 12000)}\n"""\n` : ""}
 Available AURAs you command: ${roster}.
@@ -813,7 +816,9 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       // Synthesize the ACTUAL ANSWER for the operator from the AURA results —
       // this is what the user reads as the result, not an internal status line.
       await db.update(agentsTable).set({ status: "thinking" }).where(eq(agentsTable.id, ABBY_ID));
+      const _synthPersonality = readSettings().systemPersonality?.trim() ?? "";
       const synthSystem =
+        (_synthPersonality ? _synthPersonality + "\n\n" : "") +
         (AGENT_PERSONAS[ABBY_ID] ?? "You are ABBY, the swarm orchestrator.") +
         "\n\nYou are ABBY, the orchestrator, writing the FINAL briefing to the operator. You commanded the swarm — now PRESENT the work, using ONLY the AURA results below." +
         SYNTHESIS_DOCTRINE +

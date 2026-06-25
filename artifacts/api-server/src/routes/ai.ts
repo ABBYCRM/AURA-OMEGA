@@ -8,6 +8,7 @@ import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
 import { SOURCE_POLICY } from "../lib/sources";
 import { MARKETING_ENGINE_POINTER } from "../lib/marketing";
+import { readSettings } from "./settings";
 
 const router = Router();
 
@@ -322,9 +323,11 @@ router.post("/ai/chat", async (req, res) => {
 
   const model = resolveModel(resolvedAgentId, agent.model, overrideModel);
   const persona = AGENT_PERSONAS[resolvedAgentId] ?? `You are ${agent.name}, an AI agent in the ABBY AURA swarm.`;
+  const customPersonality = readSettings().systemPersonality?.trim() ?? "";
   // Live-reach scan is appended on EVERY turn so the agent always knows its
   // real, current tools + which integrations are online.
   const systemPrompt =
+    (customPersonality ? customPersonality + "\n\n" : "") +
     persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard());
 
   // A user turn may carry uploaded files. Images are sent to the model as vision
@@ -704,7 +707,10 @@ router.post("/ai/complete", async (req, res) => {
   }
 
   const model = resolveModel(resolvedAgentId, agent?.model, overrideModel);
-  const systemPrompt = (resolvedAgentId ? (AGENT_PERSONAS[resolvedAgentId] ?? "") : "") + buildCapabilityCard(resolvedAgentId) + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES;
+  const _customPersonality = readSettings().systemPersonality?.trim() ?? "";
+  const systemPrompt =
+    (_customPersonality ? _customPersonality + "\n\n" : "") +
+    (resolvedAgentId ? (AGENT_PERSONAS[resolvedAgentId] ?? "") : "") + buildCapabilityCard(resolvedAgentId) + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES;
 
   const messages = [
     ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
