@@ -191,12 +191,12 @@ INSERT INTO "world_state" ("id") VALUES (1) ON CONFLICT ("id") DO NOTHING;
 const SEED_AGENTS = `
 INSERT INTO agents (id, name, role, description, status, color, avatar_initials, model, capabilities)
 VALUES
-  (1, 'ABBY',   'Orchestrator',  'Master orchestrator and directive router',       'idle', '#00e5ff', 'AB', 'moonshotai/kimi-k2-instruct',          ARRAY['orchestration','planning','routing']),
-  (2, 'AURA-1', 'Code Executor', 'Code generation and execution specialist',       'idle', '#bf00ff', 'A1', 'qwen/qwen3-30b-a3b',                  ARRAY['code','execution','debugging']),
-  (3, 'AURA-2', 'Browser Agent', 'Web browsing and scraping via Steel',            'idle', '#0066ff', 'A2', 'moonshotai/kimi-k2-instruct',          ARRAY['browser','scraping','research']),
-  (4, 'AURA-3', 'Memory & RAG',  'Long-term memory and retrieval',                 'idle', '#00cc88', 'A3', 'qwen/qwen3-30b-a3b',                  ARRAY['memory','rag','search']),
-  (5, 'AURA-4', 'API Connector', 'External API integration and automation',        'idle', '#ff6b00', 'A4', 'moonshotai/kimi-k2-instruct',          ARRAY['api','integration','automation']),
-  (6, 'AURA-5', 'Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'A5', 'qwen/qwen3-30b-a3b',                  ARRAY['social','communications','engagement'])
+  (1, 'ABBY',   'Orchestrator',  'Master orchestrator and directive router',       'idle', '#00e5ff', 'AB', 'moonshotai/kimi-k2.6',               ARRAY['orchestration','planning','routing']),
+  (2, 'AURA-1', 'Code Executor', 'Code generation and execution specialist',       'idle', '#bf00ff', 'A1', 'moonshotai/kimi-k2.6',               ARRAY['code','execution','debugging']),
+  (3, 'AURA-2', 'Browser Agent', 'Web browsing and scraping via Steel',            'idle', '#0066ff', 'A2', 'meta/llama-3.3-70b-instruct',        ARRAY['browser','scraping','research']),
+  (4, 'AURA-3', 'Memory & RAG',  'Long-term memory and retrieval',                 'idle', '#00cc88', 'A3', 'meta/llama-3.3-70b-instruct',        ARRAY['memory','rag','search']),
+  (5, 'AURA-4', 'API Connector', 'External API integration and automation',        'idle', '#ff6b00', 'A4', 'moonshotai/kimi-k2.6',               ARRAY['api','integration','automation']),
+  (6, 'AURA-5', 'Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'A5', 'meta/llama-3.3-70b-instruct',        ARRAY['social','communications','engagement'])
 ON CONFLICT (id) DO UPDATE SET
   name            = EXCLUDED.name,
   role            = EXCLUDED.role,

@@ -264,14 +264,14 @@ router.get("/ai/models", async (req, res) => {
     if (nvidiaConfigured()) {
       // NVIDIA NIM free-tier models the swarm uses
       const models = [
-        { id: "mistralai/mistral-medium-3.5-128b", name: "Mistral Medium 3.5 128B", context_length: 128000 },
-        { id: "mistralai/mistral-small-3.2-24b-instruct", name: "Mistral Small 3.2 24B", context_length: 32768 },
-        { id: "qwen/qwen3-235b-a22b", name: "Qwen3 235B A22B", context_length: 131072 },
-        { id: "qwen/qwen3-30b-a3b", name: "Qwen3 30B A3B", context_length: 131072 },
+        { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", context_length: 131072 },
+        { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct", context_length: 131072 },
+        { id: "meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B Instruct", context_length: 131072 },
+        { id: "qwen/qwen2.5-72b-instruct", name: "Qwen 2.5 72B Instruct", context_length: 131072 },
+        { id: "qwen/qwen2.5-coder-32b-instruct", name: "Qwen 2.5 Coder 32B", context_length: 131072 },
+        { id: "mistralai/mistral-small-3.1-24b-instruct", name: "Mistral Small 3.1 24B", context_length: 131072 },
         { id: "meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", context_length: 131072 },
         { id: "meta/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick 17B", context_length: 131072 },
-        { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1", name: "Nemotron Ultra 253B", context_length: 131072 },
-        { id: "moonshotai/kimi-k2-instruct", name: "Kimi K2 Instruct", context_length: 131072 },
       ];
       res.json({ models, provider: "nvidia" });
       return;
