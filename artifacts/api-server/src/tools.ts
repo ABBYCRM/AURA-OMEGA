@@ -1499,11 +1499,11 @@ const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
 
 export const AGENT_TOOLS: Record<number, string[]> = {
   1: ALL_TOOLS, // ABBY — full authority
-  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message"], // FORGE — code
-  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message"], // CRAWLER — browser
-  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message"], // VAULT — memory/RAG
-  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "save_artifact", "image_generate", "send_message"], // WIRE — APIs + scheduling
-  6: ["web_scrape", "web_search", "tier1_sources", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "save_artifact", "image_generate", "send_message"], // MR.NICE — social
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message"], // AURA-1 — code
+  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message"], // AURA-2 — browser
+  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message"], // AURA-3 — memory/RAG
+  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "save_artifact", "image_generate", "send_message"], // AURA-4 — APIs + scheduling
+  6: ["web_scrape", "web_search", "tier1_sources", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "save_artifact", "image_generate", "send_message"], // AURA-5 — social
 };
 
 export function getToolNamesForAgent(agentId: number): string[] {
@@ -1512,11 +1512,11 @@ export function getToolNamesForAgent(agentId: number): string[] {
 
 const ABBY_ID = 1;
 const SWARM_ROSTER: Array<[number, string, string]> = [
-  [2, "FORGE", "code execution & sandbox PRs"],
-  [3, "CRAWLER", "web browsing, scraping, screenshots, search"],
-  [4, "VAULT", "long-term memory & semantic RAG"],
-  [5, "WIRE", "external APIs, integrations, scheduling"],
-  [6, "MR.NICE", "social media & communications"],
+  [2, "AURA-1", "code execution & sandbox PRs"],
+  [3, "AURA-2", "web browsing, scraping, screenshots, search"],
+  [4, "AURA-3", "long-term memory & semantic RAG"],
+  [5, "AURA-4", "external APIs, integrations, scheduling"],
+  [6, "AURA-5", "social media & communications"],
 ];
 
 /** First sentence of a tool's description, for a compact capability listing. */
@@ -1539,7 +1539,7 @@ export function buildCapabilityCard(agentId: number): string {
   let card = `\n\nYOUR TOOLS (${names.length}; call them to do real work, never guess or fabricate results):\n${list}`;
   card += names.includes("schedule_task")
     ? `\n\nSCHEDULING: use schedule_task to run work automatically on a cron schedule, list_scheduled_tasks to review jobs, cancel_scheduled_task to stop one.`
-    : `\n\nSCHEDULING: the swarm can run recurring cron jobs (managed by ABBY/WIRE) — ask ABBY to schedule recurring work.`;
+    : `\n\nSCHEDULING: AURA-OMEGA can run recurring cron jobs (managed by ABBY/AURA-4) — ask ABBY to schedule recurring work.`;
   card += `\n\nGITHUB: query the GitHub REST API with http_request (https://api.github.com/...); it is auto-authenticated. Never web_scrape github.com pages — they are JS-rendered and return nothing useful.`;
   if (names.includes("sandbox_exec")) {
     card += `\n\nINTERACTIVE AUTOMATION: web_scrape is read-only and won't render JS-heavy or multi-step pages. When a task needs to actually fill/submit a web form or read a JS-rendered page, use sandbox_exec to run Playwright in the cloud VM (install chromium, navigate, fill, click, submit). To produce or fill official PDF forms (e.g. AcroForm fields), use sandbox_exec with reportlab/fpdf2/fillpdf/pypdf and return the output file path. Generate/prepare documents and demonstrate the flow — never submit a person's legal/financial filing on their behalf.`;

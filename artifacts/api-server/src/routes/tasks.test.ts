@@ -15,7 +15,7 @@ const sampleTask = {
   title: "Crawl site",
   description: null,
   agentId: 3,
-  agentName: "CRAWLER",
+  agentName: "AURA-2",
   status: "queued",
   priority: "medium",
   progress: 0,

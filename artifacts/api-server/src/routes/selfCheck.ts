@@ -23,7 +23,7 @@ const REQUIRED_TOOLS = [
   "cloud_code_exec", "memory_write", "memory_search", "social_api",
   "social_accounts", "calculator", "send_message", "vault_list",
 ];
-const REQUIRED_AGENTS = [1, 2, 3, 4, 5, 6]; // ABBY, FORGE, CRAWLER, VAULT, WIRE, MR.NICE
+const REQUIRED_AGENTS = [1, 2, 3, 4, 5, 6]; // ABBY, AURA-1, AURA-2, AURA-3, AURA-4, AURA-5
 
 router.get("/self-check", async (_req, res) => {
   const checks: Array<Record<string, unknown>> = [];

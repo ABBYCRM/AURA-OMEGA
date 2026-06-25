@@ -165,6 +165,10 @@ CREATE TABLE IF NOT EXISTS "social_posts" (
 );
 CREATE INDEX IF NOT EXISTS "social_posts_platform_created_idx" ON "social_posts" ("platform", "created_at");
 
+-- Rename theatrical agent names to clean AURA identifiers (idempotent).
+UPDATE "agents" SET "name" = 'AURA-5', "avatar_initials" = 'A5' WHERE "name" = 'MR.NICE';
+UPDATE "channels" SET "name" = 'aura-5', "description" = 'AURA-5 social agent channel' WHERE "name" = 'mr-nice';
+
 -- WORLD-00: single-row persistent state for Aura's living world (her position,
 -- direction, chapter, path history, breadcrumb clues, enabled flag). Only ONE
 -- row (id=1). Stores NO task content — world/render state only.
@@ -191,7 +195,7 @@ VALUES
   ('AURA-2', 'Browser Agent', 'Web browsing and scraping via Steel',            'idle', '#0066ff', 'C2', '',                       ARRAY['browser','scraping','research']),
   ('AURA-3', 'Memory & RAG',  'Long-term memory and retrieval',                 'idle', '#00cc88', 'C3', 'qwen/qwen3.7-max',       ARRAY['memory','rag','search']),
   ('AURA-4', 'API Connector', 'External API integration and automation',        'idle', '#ff6b00', 'C4', '',                       ARRAY['api','integration','automation']),
-  ('MR.NICE','Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'MN', 'qwen/qwen3.6-plus',      ARRAY['social','communications','engagement'])
+  ('AURA-5', 'Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'A5', 'qwen/qwen3.6-plus',      ARRAY['social','communications','engagement'])
 `;
 
 const SEED_CHANNELS = `
@@ -203,7 +207,7 @@ VALUES
   ('aura-2',  'agent',   'AURA-2 browser agent channel'),
   ('aura-3',  'agent',   'AURA-3 memory channel'),
   ('aura-4',  'agent',   'AURA-4 API connector channel'),
-  ('mr-nice', 'agent',   'MR.NICE social agent channel')
+  ('aura-5',  'agent',   'AURA-5 social agent channel')
 `;
 
 // Real executable tools each agent can call (mirrors AGENT_TOOLS in tools.ts).

@@ -4,7 +4,7 @@
  * This is what makes the swarm REAL instead of scripted text:
  *  - ABBY decomposes an operator goal into concrete per-AURA directives.
  *  - Each target AURA actually executes its directive via its real OpenRouter model.
- *  - CRAWLER (browser agent) runs a real Steel scrape when a URL is present and
+ *  - AURA-2 (browser agent) runs a real Steel scrape when a URL is present and
  *    feeds the real web content back into its reasoning.
  *  - Real messages, tool calls, tasks, monologue lines, agent status, and command
  *    rows are written to the DB so the live dashboard reflects actual work.
@@ -668,8 +668,8 @@ export async function orchestrateGoal(opts: {
   sourceContext?: string | null;
   /**
    * Force the whole goal onto a SINGLE agent as ONE directive (no multi-AURA
-   * decomposition). Used for connected-account/Composio actions: only ABBY/WIRE/
-   * MR.NICE hold the Composio tools, and the goal must run exactly once — fanning
+   * decomposition). Used for connected-account/Composio actions: only ABBY/AURA-4/
+   * AURA-5 hold the Composio tools, and the goal must run exactly once — fanning
    * it out duplicated work (e.g. published an Instagram post twice) and routed
    * slices to agents that can't act on it.
    */
@@ -727,7 +727,7 @@ Respond with ONLY a JSON array (no prose, no code fences) of objects shaped: {"a
     }
 
     // Fallback: if ABBY didn't return parseable directives, route the raw goal
-    // to the most relevant single AURA (browser if a URL is present, else FORGE).
+    // to the most relevant single AURA (browser if a URL is present, else AURA-1).
     if (directives.length === 0) {
       const url = extractUrl(goal);
       const fallback =

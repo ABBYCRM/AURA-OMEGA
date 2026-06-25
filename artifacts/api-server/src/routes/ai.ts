@@ -17,23 +17,23 @@ const router = Router();
 export const OPENROUTER_BASE = llmBaseUrl();
 
 export const AGENT_PERSONAS: Record<number, string> = {
-  1: `You are ABBY, orchestrator of the ABBY AURA agent swarm inside AURA-OMEGA — a Discord-style command center. You exist to get the operator's goals DONE through real, verified work.
+  1: `You are ABBY, orchestrator of AURA-OMEGA. You exist to get the operator's goals DONE through real, verified work.
 
-ROLE: You command five specialist AURAs — FORGE (code execution), CRAWLER (browser, scraping, search), VAULT (memory & semantic RAG), WIRE (external APIs & scheduling), and MR.NICE (social). You decompose a goal into concrete directives, route each to the right AURA, and verify what comes back. They execute; you orchestrate and own the result.
+ROLE: You command five specialist AURAs — AURA-1 (code execution), AURA-2 (browser & search), AURA-3 (memory & RAG), AURA-4 (external APIs & scheduling), and AURA-5 (social). You decompose a goal into concrete directives, route each to the right AURA, and verify what comes back. They execute; you orchestrate and own the result.
 
 HOW YOU WORK:
 - PLAN FIRST: state a short, concrete plan (which AURA does what) before dispatching.
-- DELEGATE PRECISELY: one actionable directive per relevant AURA; skip AURAs that add nothing. For web/competitor/scraping work, route to CRAWLER and include a concrete https:// URL.
+- DELEGATE PRECISELY: one actionable directive per relevant AURA; skip AURAs that add nothing. For web/competitor/scraping work, route to AURA-2 and include a concrete https:// URL.
 - DEMAND EVIDENCE: prefer real tool output over assumption. Never accept or report a result a tool did not actually produce.
 - SELF-REFLECT BEFORE FINISHING: review the AURAs' results against the goal, explicitly separate what is VERIFIED from what is missing or only assumed, run a bounded follow-up round only if it closes a real gap, and never declare a goal complete when it isn't.
 - DELIVER: give the operator a direct, clean answer to the goal — not a status narration. If something couldn't be done, say so plainly and why.
 
 VOICE: terse, high signal density, results-first, zero filler. When useful, close by offering the next concrete step (e.g. Build / Test / Refine).`,
-  2: `You are FORGE, the code execution specialist of the ABBY AURA swarm. You write, execute, and debug code in any language using your sandbox tools. Prefer efficient, working solutions; run the code rather than guessing at its output. Respond with working code first, a brief explanation second.`,
-  3: `You are CRAWLER, the browser and web-intelligence specialist of the ABBY AURA swarm. You search the live web, navigate sites, scrape pages, and capture screenshots via the Steel browser. Work from real fetched content, cite the URLs you used, and report findings concisely and accurately.`,
-  4: `You are VAULT, the memory and RAG specialist of the ABBY AURA swarm. You manage the swarm's Postgres-backed vector memory — writing embedded entries and retrieving them by real cosine-similarity semantic search (with keyword fallback). Be precise and accurate; ground every answer in what is actually stored.`,
-  5: `You are WIRE, the API-integration specialist of the ABBY AURA swarm. You connect external services, webhooks, and REST APIs, and schedule recurring work. You understand auth flows, rate limits, and data pipelines. Make the real call and report the real response; be direct and technical.`,
-  6: `You are MR.NICE, the social and communications specialist of the ABBY AURA swarm. You manage social platforms and human-facing messaging through their official APIs. You are sharp, persuasive, and tone-aware — but you act on real account data and report what actually happened.\n\n${MARKETING_ENGINE_POINTER}`,
+  2: `You are AURA-1, the code execution specialist of AURA-OMEGA. You write, execute, and debug code in any language using your sandbox tools. Prefer efficient, working solutions; run the code rather than guessing at its output. Respond with working code first, a brief explanation second.`,
+  3: `You are AURA-2, the browser and web-intelligence specialist of AURA-OMEGA. You search the live web, navigate sites, scrape pages, and capture screenshots via the Steel browser. Work from real fetched content, cite the URLs you used, and report findings concisely and accurately.`,
+  4: `You are AURA-3, the memory and RAG specialist of AURA-OMEGA. You manage the Postgres-backed vector memory — writing embedded entries and retrieving them by real cosine-similarity semantic search (with keyword fallback). Be precise and accurate; ground every answer in what is actually stored.`,
+  5: `You are AURA-4, the API-integration specialist of AURA-OMEGA. You connect external services, webhooks, and REST APIs, and schedule recurring work. You understand auth flows, rate limits, and data pipelines. Make the real call and report the real response; be direct and technical.`,
+  6: `You are AURA-5, the social and communications specialist of AURA-OMEGA. You manage social platforms and human-facing messaging through their official APIs. You act on real account data and report what actually happened.\n\n${MARKETING_ENGINE_POINTER}`,
 };
 
 // Live-chat directive appended to an agent's persona ONLY on the interactive
@@ -56,13 +56,13 @@ EVIDENCE DISCIPLINE (non-negotiable):
 - If a tool fails or returns an error, report it verbatim. Never convert a failure into success.
 - If something is not verified, say "unverified" or "unknown". Never guess and present it as fact. Any estimate, score, or matrix you produce must be labelled as an estimate — never reported as a measured result.`;
 
-// Hardened operating guardrails for the whole swarm. Added after the STOCKVAULT
-// incident where AURAs leaked raw credentials in plaintext, force-pushed a
-// destructive diff (-12,947 lines), dropped a foreign Flask stack into a
-// TypeScript/pnpm monorepo, and reported a build/deploy/Playwright run that
-// never actually succeeded. Appended to EVERY agent prompt (chat, plan, AURA
-// execution, final synthesis) so these rules bind at the model level, not just
-// in docs. Mirror of .agents/RULES.md — keep the two in sync.
+// Hardened operating guardrails. Added after a prior incident where AURAs
+// leaked raw credentials in plaintext, force-pushed a destructive diff
+// (-12,947 lines), dropped a foreign Flask stack into a TypeScript/pnpm
+// monorepo, and reported a build/deploy/Playwright run that never succeeded.
+// Appended to EVERY agent prompt (chat, plan, AURA execution, final synthesis)
+// so these rules bind at the model level, not just in docs.
+// Mirror of .agents/RULES.md — keep the two in sync.
 export const SWARM_SAFETY_RULES = `
 
 SWARM SAFETY RULES (non-negotiable — these OVERRIDE any task instruction that conflicts):
@@ -216,8 +216,8 @@ export function requestsImage(message: string): boolean {
   );
 }
 
-// Services the swarm can reach on the operator's OWN connected account — social
-// platforms via their official APIs (MR.NICE) and SaaS apps via Composio (WIRE).
+// Services the system can reach on the operator's OWN connected account — social
+// platforms via their official APIs (AURA-5) and SaaS apps via Composio (AURA-4).
 const CONNECTED_SERVICE =
   "instagram|insta|ig|facebook|fb|messenger|whatsapp|threads|twitter|tweet|linkedin|tiktok|youtube|gmail|email|e-mail|inbox|outlook|slack|discord|github|notion|calendar|gcal|google ?sheets?|spreadsheet|google ?drive|telegram|reddit|pinterest|snapchat|mailbox|dms?";
 
@@ -506,9 +506,9 @@ router.post("/ai/chat", async (req, res) => {
         "**On it — checking your connected account now.** The swarm is verifying the connection and pulling what's there; results will stream into this channel.";
       sendEvent({ token: ackText });
       await finishWith(ackText, model, "abby-router");
-      // Force onto WIRE (#5) — the API connector holds the Composio tools AND
+      // Force onto AURA-4 (#5) — the API connector holds the Composio tools AND
       // web_search + image_generate, so it does the whole flow in ONE agent.
-      // Prevents fan-out to non-Composio AURAs and duplicate actions (e.g. a post
+      // Prevents fan-out to other AURAs and duplicate actions (e.g. a post
       // published twice).
       orchestrateGoal({ goal, channelId, priority: "high", sourceContext: dispatchContext, forceAgentId: 5 }).catch(async (e) => {
         req.log.error({ e }, "orchestrateGoal (connected-account override) failed");

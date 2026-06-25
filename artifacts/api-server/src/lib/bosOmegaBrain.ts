@@ -13,7 +13,7 @@ export type RunStatus =
   | "FAILED";
 export type TruthLabel = "VERIFIED" | "INFERRED" | "UNKNOWN" | "FAILED" | "BLOCKED";
 export type TaskType = "CODE" | "RESEARCH" | "UI" | "DEPLOYMENT" | "SECURITY" | "WRITING" | "N8N" | "GENERAL_EXECUTION";
-export type AgentRole = "OMEGA" | "ALPHA" | "PRAXIS" | "VAULT" | "CRAWLER" | "FORGE" | "WIRE" | "NICE";
+export type AgentRole = "OMEGA" | "ALPHA" | "PRAXIS" | "AURA-1" | "AURA-2" | "AURA-3" | "AURA-4" | "AURA-5";
 
 export interface Evidence {
   label: TruthLabel;
@@ -166,7 +166,7 @@ export function createBosOmegaBrainPlan(objective: string): BrainPlan {
 export function markBrainExecuted(plan: BrainPlan, message: string): BrainPlan {
   const next = JSON.parse(JSON.stringify(plan)) as BrainPlan;
   next.status = "EXECUTED";
-  addEvidence(next, "VERIFIED", next.taskType === "N8N" ? "WIRE" : "PRAXIS", message);
+  addEvidence(next, "VERIFIED", next.taskType === "N8N" ? "AURA-4" : "PRAXIS", message);
   return updateActiveInference(next);
 }
 

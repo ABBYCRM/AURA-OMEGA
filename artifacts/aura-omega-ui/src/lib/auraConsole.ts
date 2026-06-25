@@ -70,7 +70,7 @@ export const cronTemplates = [
   { name: "Heartbeat Snapshot", schedule: "*/5 * * * *", agent: "ABBY", prompt: "Read active tasks, n8n health, recent errors, and memory status. Do not execute external side effects unless policy allows it." },
   { name: "Nightly Self-Learning Review", schedule: "0 4,5,6 * * *", agent: "ABBY", prompt: "Read unresolved errors, find verified fixes, save reusable lessons as PROBLEM → SOLUTION with evidence." },
   { name: "Weekly LLM Catalog Probe", schedule: "0 4 * * 0", agent: "ABBY", prompt: "Probe provider model catalogs, report drops/additions, never apply drops automatically." },
-  { name: "Daily Continuity Report", schedule: "0 23 * * *", agent: "VAULT", prompt: "Summarize verified memory changes, open blockers, active automations, and next actions." },
+  { name: "Daily Continuity Report", schedule: "0 23 * * *", agent: "AURA-3", prompt: "Summarize verified memory changes, open blockers, active automations, and next actions." },
 ];
 
 export const toolDomains = [

@@ -3,7 +3,7 @@
  *
  * Provides vector embeddings via any OpenAI-compatible `/embeddings` endpoint
  * (OpenAI, Together, Voyage, Jina, a local server, …). This is what turns
- * VAULT's memory_search from keyword `ILIKE` matching into genuine semantic
+ * AURA-3's memory_search from keyword `ILIKE` matching into genuine semantic
  * retrieval — cosine similarity over real embeddings.
  *
  * Fully optional: when no embeddings key is configured, `embed()` returns null

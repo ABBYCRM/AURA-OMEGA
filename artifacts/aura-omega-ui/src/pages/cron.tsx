@@ -22,12 +22,12 @@ interface CronJob {
 }
 
 const AGENT_INFO: Record<number, { name: string; color: string; initials: string }> = {
-  1: { name: "ABBY",    color: "#00e5ff", initials: "AB" },
-  2: { name: "FORGE",   color: "#bf00ff", initials: "FG" },
-  3: { name: "CRAWLER", color: "#0066ff", initials: "CR" },
-  4: { name: "VAULT",   color: "#00cc88", initials: "VT" },
-  5: { name: "WIRE",    color: "#ff6b00", initials: "WR" },
-  6: { name: "MR.NICE", color: "#ff2d78", initials: "MN" },
+  1: { name: "ABBY",   color: "#00e5ff", initials: "AB" },
+  2: { name: "AURA-1", color: "#bf00ff", initials: "A1" },
+  3: { name: "AURA-2", color: "#0066ff", initials: "A2" },
+  4: { name: "AURA-3", color: "#00cc88", initials: "A3" },
+  5: { name: "AURA-4", color: "#ff6b00", initials: "A4" },
+  6: { name: "AURA-5", color: "#ff2d78", initials: "A5" },
 };
 
 const PRESET_SCHEDULES = [

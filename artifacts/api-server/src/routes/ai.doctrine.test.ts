@@ -245,7 +245,7 @@ describe("ANTI_HALLUCINATION_DIRECTIVE — still intact alongside the doctrine",
   });
 });
 
-describe("SWARM_SAFETY_RULES — hardened guardrails from the STOCKVAULT incident", () => {
+describe("SWARM_SAFETY_RULES — hardened operating guardrails", () => {
   it("bans raw secrets in the open and demands rotation on leak", () => {
     expect(SWARM_SAFETY_RULES).toContain("SECRETS NEVER IN THE OPEN");
     expect(SWARM_SAFETY_RULES).toContain("ghp_");

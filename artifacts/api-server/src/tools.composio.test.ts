@@ -11,8 +11,8 @@ vi.mock("@workspace/db", async (importOriginal) => {
 import { TOOL_REGISTRY, getToolNamesForAgent, isToolAllowed, buildCapabilityCard } from "./tools";
 
 const ABBY = 1;
-const WIRE = 5;
-const MR_NICE = 6;
+const AURA4 = 5;
+const AURA5 = 6;
 
 describe("Composio: agents know which apps are LIVE", () => {
   it("registers a composio_apps discovery tool", () => {
@@ -20,8 +20,8 @@ describe("Composio: agents know which apps are LIVE", () => {
     expect(TOOL_REGISTRY["composio_apps"]!.description.toLowerCase()).toContain("live");
   });
 
-  it("wires composio to ABBY, WIRE (API), and MR.NICE (social)", () => {
-    for (const id of [ABBY, WIRE, MR_NICE]) {
+  it("wires composio to ABBY, AURA-4 (API), and AURA-5 (social)", () => {
+    for (const id of [ABBY, AURA4, AURA5]) {
       expect(isToolAllowed(id, "composio_apps"), `agent #${id} should have composio_apps`).toBe(true);
       expect(isToolAllowed(id, "composio_action"), `agent #${id} should have composio_action`).toBe(true);
     }
@@ -34,19 +34,19 @@ describe("Composio: agents know which apps are LIVE", () => {
   it("provides a deterministic instagram_post tool wired to the social/API agents", () => {
     expect(TOOL_REGISTRY["instagram_post"]).toBeTruthy();
     expect(TOOL_REGISTRY["instagram_post"]!.description.toLowerCase()).toContain("permalink");
-    for (const id of [ABBY, WIRE, MR_NICE]) {
+    for (const id of [ABBY, AURA4, AURA5]) {
       expect(isToolAllowed(id, "instagram_post"), `agent #${id} should have instagram_post`).toBe(true);
     }
   });
 
-  it("WIRE's capability card instructs checking live Composio apps before acting", () => {
-    const card = buildCapabilityCard(WIRE);
+  it("AURA4's capability card instructs checking live Composio apps before acting", () => {
+    const card = buildCapabilityCard(AURA4);
     expect(card).toContain("composio_apps");
     expect(card.toLowerCase()).toContain("connect apps");
   });
 
-  it("getToolNamesForAgent lists composio_apps before composio_action for WIRE", () => {
-    const names = getToolNamesForAgent(WIRE);
+  it("getToolNamesForAgent lists composio_apps before composio_action for AURA4", () => {
+    const names = getToolNamesForAgent(AURA4);
     expect(names.indexOf("composio_apps")).toBeGreaterThanOrEqual(0);
     expect(names.indexOf("composio_apps")).toBeLessThan(names.indexOf("composio_action"));
   });
