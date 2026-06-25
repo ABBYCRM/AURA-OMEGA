@@ -2,7 +2,7 @@
  * AURA-OMEGA — Real Orchestration Engine
  *
  * This is what makes the swarm REAL instead of scripted text:
- *  - ABBY (Grok) decomposes an operator goal into concrete per-AURA directives.
+ *  - ABBY decomposes an operator goal into concrete per-AURA directives.
  *  - Each target AURA actually executes its directive via its real OpenRouter model.
  *  - CRAWLER (browser agent) runs a real Steel scrape when a URL is present and
  *    feeds the real web content back into its reasoning.
@@ -30,8 +30,6 @@ import {
   OPENROUTER_BASE,
   resolveModel,
   openrouterHeaders,
-  buddyConfigured,
-  buddyComplete,
   ANTI_HALLUCINATION_DIRECTIVE,
   EXECUTION_DOCTRINE,
   RESEARCH_PLAYBOOKS,
@@ -167,23 +165,6 @@ async function completeChat(model: string, system: string, user: string, maxToke
   }
   if (!r.ok) {
     const errText = (await r.text()).slice(0, 200);
-    // Fall back to Buddy AI if configured, so a single-provider outage doesn't
-    // kill the run.
-    if (buddyConfigured()) {
-      try {
-        const out = await buddyComplete(
-          [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-          maxTokens,
-        );
-        traceLlmRun({ name: "completeChat", model: "buddy-fallback", input: { system, user }, output: out, startedAt });
-        return out;
-      } catch (e) {
-        logger.warn({ e }, "Buddy fallback failed after OpenRouter error");
-      }
-    }
     traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: `OpenRouter ${r.status}: ${errText}` });
     throw new Error(`OpenRouter ${r.status}: ${errText}`);
   }
@@ -246,19 +227,6 @@ async function completeChatTurn(
   }
   if (!r.ok) {
     const errText = (await r.text()).slice(0, 200);
-    // Buddy fallback: tool-free completion so the loop can still make progress.
-    if (buddyConfigured()) {
-      try {
-        const textMessages = messages.map((m) => ({
-          role: m.role,
-          content: typeof (m as { content?: unknown }).content === "string" ? (m as { content: string }).content : "",
-        }));
-        const out = await buddyComplete(textMessages, 2048);
-        return { role: "assistant", content: out };
-      } catch (e) {
-        logger.warn({ e }, "Buddy fallback failed after OpenRouter error (tool turn)");
-      }
-    }
     throw new Error(`OpenRouter ${r.status}: ${errText}`);
   }
   const data = (await r.json()) as {
@@ -729,7 +697,7 @@ export async function orchestrateGoal(opts: {
 
     await db.update(agentsTable).set({ status: "thinking" }).where(eq(agentsTable.id, ABBY_ID));
 
-    // ABBY (Grok) decomposes the goal into per-AURA directives.
+    // ABBY decomposes the goal into per-AURA directives.
     const roster = auras
       .map((c) => `${c.id}=${c.name} (${c.role ?? "agent"})`)
       .join(", ");

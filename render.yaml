@@ -5,7 +5,6 @@ services:
     plan: free
     region: oregon
     branch: main
-    # Build source on Render so Discord bridge source changes cannot be missed by a stale dist bundle.
     buildCommand: echo "dist is prebuilt — skipping build on Render"
     startCommand: node artifacts/api-server/dist/index.mjs
     envVars:
@@ -35,9 +34,7 @@ services:
         sync: false
       - key: FIRECRAWL_API_KEY
         sync: false
-      - key: NEUROBUDDY_API_KEY
-        sync: false
-      # Discord bridge: UI -> API -> Discord -> existing Claw/AURA-OMEGA -> Discord -> UI
+      # Discord integration
       - key: DISCORD_BRIDGE_ENABLED
         value: "true"
       - key: DISCORD_BOT_TOKEN
@@ -52,13 +49,6 @@ services:
         value: "90000"
       - key: DISCORD_REPLY_POLL_MS
         value: "2000"
-      # Buddy AI fallback LLM
-      - key: BUDDY_API_KEY
-        sync: false
-      - key: BUDDY_BASE_URL
-        sync: false
-      - key: BUDDY_MODEL
-        value: bos-omega
       # Composio tool/auth router (execution off by default)
       - key: COMPOSIO_API_KEY
         sync: false

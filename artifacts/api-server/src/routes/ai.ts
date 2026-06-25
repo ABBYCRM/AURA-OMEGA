@@ -244,50 +244,12 @@ export function requestsConnectedAccountAction(message: string): boolean {
 const CHAT_HISTORY_LIMIT = 16;
 
 export const ABBY_ID = 1;
-export const ABBY_DEFAULT_MODEL = "x-ai/grok-4.3";
+export const ABBY_DEFAULT_MODEL = process.env["ABBY_MODEL"] ?? "";
 
-// When BOS Omega (BUDDY) is configured it IS the primary runtime — respect the
-// model it advertises. Only force Grok when BUDDY is not configured.
-export function resolveModel(agentId: number, agentModel: string | null | undefined, override: unknown): string {
-  const candidate = (typeof override === "string" && override.trim())
+export function resolveModel(_agentId: number, agentModel: string | null | undefined, override: unknown): string {
+  return (typeof override === "string" && override.trim())
     ? override
-    : (agentModel ?? ABBY_DEFAULT_MODEL);
-  if (agentId === ABBY_ID && !candidate.startsWith("x-ai/") && !buddyConfigured()) {
-    return ABBY_DEFAULT_MODEL;
-  }
-  return candidate;
-}
-
-// ─── Buddy AI fallback (OpenAI-compatible) ───────────────────────────────────
-// An optional secondary LLM endpoint (e.g. NeuroBuddy / BOS-OMEGA). When the
-// primary OpenRouter call fails and Buddy is configured, the orchestrator falls
-// back to it so a single-provider outage doesn't kill a run.
-
-export function buddyConfigured(): boolean {
-  return !!(process.env["BUDDY_API_KEY"] && process.env["BUDDY_BASE_URL"]);
-}
-
-/** Non-streaming completion against the Buddy endpoint. Throws on failure. */
-export async function buddyComplete(
-  messages: Array<{ role: string; content: string }>,
-  maxTokens = 1024,
-): Promise<string> {
-  const key = process.env["BUDDY_API_KEY"];
-  const base = process.env["BUDDY_BASE_URL"];
-  if (!key || !base) throw new Error("Buddy fallback is not configured");
-  const model = process.env["BUDDY_MODEL"] ?? "bos-omega";
-  const r = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      ...heliconeHeaders(),
-    },
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
-  });
-  if (!r.ok) throw new Error(`Buddy ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const data = (await r.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return data.choices?.[0]?.message?.content?.trim() || "(no response)";
+    : (agentModel || ABBY_DEFAULT_MODEL);
 }
 
 export function openrouterHeaders() {
@@ -302,45 +264,12 @@ export function openrouterHeaders() {
   };
 }
 
-/** Headers for calling BOS Omega (BUDDY) — the primary runtime when configured. */
-export function buddyHeaders() {
-  const key = process.env["BUDDY_API_KEY"];
-  if (!key) throw new Error("BUDDY_API_KEY is not set");
-  return {
-    "Authorization": `Bearer ${key}`,
-    "Content-Type": "application/json",
-    ...heliconeHeaders(),
-  };
-}
-
-/** Base URL + auth headers for whichever LLM backend is active right now.
- *  BOS Omega (BUDDY) takes priority when both keys are configured. */
-export function activeLlm(): { base: string; headers: Record<string, string>; model: (agentModel: string) => string } {
-  if (buddyConfigured()) {
-    const bosModel = process.env["BUDDY_MODEL"] ?? "bos-omega";
-    return {
-      base: process.env["BUDDY_BASE_URL"]!.replace(/\/$/, ""),
-      headers: buddyHeaders(),
-      model: () => bosModel,
-    };
-  }
-  return {
-    base: OPENROUTER_BASE,
-    headers: openrouterHeaders(),
-    model: (m) => m,
-  };
-}
-
 // List available OpenRouter models (filtered to interesting ones)
 router.get("/ai/models", async (req, res) => {
   try {
     const r = await fetch(`${OPENROUTER_BASE}/models`, { headers: openrouterHeaders() });
     const data = await r.json() as { data: { id: string; name: string; context_length: number }[] };
     const featured = [
-      "x-ai/grok-4.3",
-      "x-ai/grok-build-0.1",
-      "x-ai/grok-4.20",
-      "x-ai/grok-4.20-multi-agent",
       "qwen/qwen3.7-plus",
       "qwen/qwen3.7-max",
       "qwen/qwen3.6-plus",
@@ -509,32 +438,6 @@ router.post("/ai/chat", async (req, res) => {
     res.end();
   };
 
-  // Fallback to Buddy (non-streaming) when the primary provider fails — e.g. a
-  // 402 (out of credits). Emits the full reply as one token so the UI still
-  // renders an answer instead of a raw error.
-  const tryBuddyFallback = async (reason: string): Promise<boolean> => {
-    if (!buddyConfigured()) return false;
-    try {
-      // Coerce any multimodal parts to text — the Buddy fallback is text-only.
-      const buddyMessages = chatMessages.map((m) => ({
-        role: m.role,
-        content:
-          typeof m.content === "string"
-            ? m.content
-            : m.content.map((p) => (p.type === "text" ? p.text : "[image attachment]")).join("\n"),
-      }));
-      const text = await buddyComplete(buddyMessages, 700);
-      if (!text.trim() || text === "(no response)") return false;
-      sendEvent({ token: text });
-      req.log.warn({ reason }, "AI chat fell back to Buddy");
-      await finishWith(text, process.env["BUDDY_MODEL"] ?? "bos-omega", "buddy-fallback");
-      return true;
-    } catch (e) {
-      req.log.error({ e }, "Buddy fallback failed in AI chat");
-      return false;
-    }
-  };
-
   // Dispatch context: the current request PLUS the recent transcript, so the
   // AURAs can resolve cross-turn references ("that file", "the brief", "make it a
   // PDF") and reuse prior content/figures exactly instead of converting the literal
@@ -638,12 +541,11 @@ router.post("/ai/chat", async (req, res) => {
         "If the request needs real or current information you don't already have, prefer dispatch=true. " +
         "ALSO dispatch=true whenever the request asks you to PRODUCE or SAVE a downloadable file/artifact (deck, report, PDF, CSV, document, code file), run code, fill/submit a form, or do any multi-step build — those need tools (save_artifact, code, web) that only the AURAs have, so answering inline cannot actually create a downloadable file. Only answer inline (dispatch=false) for pure conversation or a quick factual answer that needs no tool and no saved file. " +
         "The `reply` must be ABBY's actual answer to the operator AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
-      const llm = activeLlm();
-      const decRes = await fetch(`${llm.base}/chat/completions`, {
+      const decRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
-        headers: llm.headers,
+        headers: openrouterHeaders(),
         body: JSON.stringify({
-          model: llm.model(model),
+          model,
           messages: [{ role: "system", content: decisionSystem }, ...history],
           stream: false,
           max_tokens: 800,
@@ -703,12 +605,11 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const llm = activeLlm();
-    const orRes = await fetch(`${llm.base}/chat/completions`, {
+    const orRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
       method: "POST",
-      headers: llm.headers,
+      headers: openrouterHeaders(),
       body: JSON.stringify({
-        model: llm.model(model),
+        model,
         stream: true,
         messages: chatMessages,
         max_tokens: 700,
@@ -718,12 +619,10 @@ router.post("/ai/chat", async (req, res) => {
     if (!orRes.ok) {
       const errText = await orRes.text();
       req.log.error({ status: orRes.status, errText }, "OpenRouter error");
-      if (await tryBuddyFallback(`openrouter ${orRes.status}`)) return;
-      const backend = buddyConfigured() ? "BOS Omega" : "OpenRouter";
       const hint =
         orRes.status === 402
-          ? `${backend} is out of credits. Add credits or check BUDDY_API_KEY/BUDDY_BASE_URL.`
-          : `${backend} error ${orRes.status}: ${errText.slice(0, 200)}`;
+          ? `OpenRouter is out of credits. Add credits to your OpenRouter account.`
+          : `OpenRouter error ${orRes.status}: ${errText.slice(0, 200)}`;
       sendEvent({ error: hint });
       sendEvent({ done: true });
       res.end(); return;
@@ -732,7 +631,6 @@ router.post("/ai/chat", async (req, res) => {
     const decoder = new TextDecoder();
     const reader = orRes.body?.getReader();
     if (!reader) {
-      if (await tryBuddyFallback("no response body")) return;
       sendEvent({ error: "No response body from OpenRouter" });
       sendEvent({ done: true });
       res.end(); return;
@@ -818,20 +716,10 @@ router.post("/ai/complete", async (req, res) => {
       body: JSON.stringify({ model, messages, max_tokens: 512 }),
     });
     if (!r.ok) {
-      // Fall back to Buddy on provider failure (e.g. 402 out of credits).
-      if (buddyConfigured()) {
-        try {
-          const content = await buddyComplete(messages, 512);
-          res.json({ content, model: process.env["BUDDY_MODEL"] ?? "bos-omega", agentId: resolvedAgentId, via: "buddy-fallback" });
-          return;
-        } catch (e) {
-          req.log.error({ e }, "Buddy fallback failed in AI complete");
-        }
-      }
       const errText = (await r.text()).slice(0, 200);
       const hint =
         r.status === 402
-          ? "OpenRouter is out of credits. Add credits or configure Buddy fallback (BUDDY_API_KEY/BUDDY_BASE_URL)."
+          ? "OpenRouter is out of credits. Add credits to your OpenRouter account."
           : `OpenRouter error ${r.status}: ${errText}`;
       res.status(502).json({ error: hint });
       return;

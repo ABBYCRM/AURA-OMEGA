@@ -9,11 +9,11 @@ export interface IntegrationCard {
 }
 
 export const integrationCatalog: IntegrationCard[] = [
-  { name: "NVIDIA NIM", category: "llm", configured: true, description: "7-key model pool for paid model routing and fallback.", env: ["NVIDIA_API_KEY", "NVIDIA_API_KEY_MINIMAX", "NVIDIA_API_KEY_BUDDY"] },
-  { name: "OpenRouter", category: "llm", configured: true, description: "Grok, Gemini, GPT, Claude, Qwen, Llama, DeepSeek through one router.", env: ["OPENROUTER_API_KEY"] },
+  { name: "NVIDIA NIM", category: "llm", configured: true, description: "7-key model pool for paid model routing and fallback.", env: ["NVIDIA_API_KEY", "NVIDIA_API_KEY_MINIMAX"] },
+  { name: "OpenRouter", category: "llm", configured: true, description: "Gemini, GPT, Claude, Qwen, Llama, DeepSeek and more through one router.", env: ["OPENROUTER_API_KEY"] },
   { name: "OpenAI Direct", category: "llm", configured: true, description: "Direct GPT/o-series calls for high reliability and image generation.", env: ["OPENAI_API_KEY"] },
   { name: "Google Gemini", category: "llm", configured: true, description: "Gemini 2.0/2.5 model access for planner or multimodal worker roles.", env: ["GEMINI_API_KEY"] },
-  { name: "Kimi K2.6", category: "llm", configured: false, description: "Primary external reasoning brain when wired through BOS policy gates.", env: ["KIMI_API_KEY", "KIMI_BASE_URL", "KIMI_MODEL"] },
+  { name: "Kimi K2.6", category: "llm", configured: false, description: "External reasoning model access.", env: ["KIMI_API_KEY", "KIMI_BASE_URL", "KIMI_MODEL"] },
   { name: "Massive / Polygon", category: "data", configured: true, description: "Stocks, forex, crypto, options, and market data feeds.", env: ["MASSIVE_API_KEY"] },
   { name: "Scrapfly", category: "data", configured: true, description: "Anti-bot scraping, JS rendering, and guarded-page retrieval.", env: ["SCRAPFLY_API_KEY"] },
   { name: "Helicone", category: "observability", configured: true, description: "LLM call telemetry, cost tracing, and provider analytics.", env: ["HELICONE_API_KEY"] },

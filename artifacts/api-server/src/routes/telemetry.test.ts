@@ -18,7 +18,7 @@ const sampleAgent = {
   status: "idle",
   color: "#00e5ff",
   avatarInitials: "AB",
-  model: "x-ai/grok-4.3",
+  model: "",
   contextUsed: 1000,
   contextMax: 128000,
   capabilities: [],
