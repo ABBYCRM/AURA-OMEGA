@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { llmBaseUrl, heliconeHeaders, integrationStatus } from "../lib/integrations";
+import { llmBaseUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus } from "../lib/integrations";
 import { listSecretNames } from "../lib/vault";
 import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
@@ -252,40 +252,41 @@ export function resolveModel(_agentId: number, agentModel: string | null | undef
     : (agentModel || ABBY_DEFAULT_MODEL);
 }
 
+/** Auth + content headers for LLM calls. Uses NVIDIA NIM when configured, falls back to OpenRouter. */
 export function openrouterHeaders() {
-  const key = process.env["OPENROUTER_API_KEY"];
-  if (!key) throw new Error("OPENROUTER_API_KEY is not set");
-  return {
-    "Authorization": `Bearer ${key}`,
-    "Content-Type": "application/json",
-    "HTTP-Referer": "https://aura-omega-ui.abbyaura.io",
-    "X-Title": "AURA-OMEGA",
-    ...heliconeHeaders(),
-  };
+  return llmHeaders();
 }
 
-// List available OpenRouter models (filtered to interesting ones)
+// List available models — NVIDIA NIM when configured, else OpenRouter
 router.get("/ai/models", async (req, res) => {
   try {
+    if (nvidiaConfigured()) {
+      // NVIDIA NIM free-tier models the swarm uses
+      const models = [
+        { id: "mistralai/mistral-medium-3.5-128b", name: "Mistral Medium 3.5 128B", context_length: 128000 },
+        { id: "mistralai/mistral-small-3.2-24b-instruct", name: "Mistral Small 3.2 24B", context_length: 32768 },
+        { id: "qwen/qwen3-235b-a22b", name: "Qwen3 235B A22B", context_length: 131072 },
+        { id: "qwen/qwen3-30b-a3b", name: "Qwen3 30B A3B", context_length: 131072 },
+        { id: "meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", context_length: 131072 },
+        { id: "meta/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick 17B", context_length: 131072 },
+        { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1", name: "Nemotron Ultra 253B", context_length: 131072 },
+        { id: "moonshotai/kimi-k2-instruct", name: "Kimi K2 Instruct", context_length: 131072 },
+      ];
+      res.json({ models, provider: "nvidia" });
+      return;
+    }
     const r = await fetch(`${OPENROUTER_BASE}/models`, { headers: openrouterHeaders() });
     const data = await r.json() as { data: { id: string; name: string; context_length: number }[] };
     const featured = [
-      "qwen/qwen3.7-plus",
-      "qwen/qwen3.7-max",
-      "qwen/qwen3.6-plus",
-      "qwen/qwen3.6-max-preview",
-      "openai/gpt-4o",
-      "openai/o4-mini",
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-5",
-      "meta-llama/llama-4-maverick",
-      "google/gemini-2.5-pro",
-      "mistral/mistral-large",
+      "qwen/qwen3-plus", "qwen/qwen3-max",
+      "openai/gpt-4o", "openai/o4-mini",
+      "anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-5",
+      "meta-llama/llama-4-maverick", "google/gemini-2.5-pro",
     ];
     const models = (data.data ?? []).filter(m => featured.includes(m.id));
-    res.json({ models });
+    res.json({ models, provider: "openrouter" });
   } catch (err) {
-    req.log.error({ err }, "Failed to fetch OpenRouter models");
+    req.log.error({ err }, "Failed to fetch models");
     res.status(500).json({ error: "Failed to fetch models" });
   }
 });

@@ -25,10 +25,20 @@ function clip(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}\n…[truncated ${s.length - n} chars]` : s;
 }
 
-// ─── Helicone (OpenRouter observability proxy) ───────────────────────────────
-// Helicone sits transparently in front of OpenRouter: same OpenAI-compatible
-// API, but the base host changes and a Helicone-Auth header is added. When no
-// Helicone key is configured we fall through to OpenRouter directly.
+// ─── NVIDIA NIM (primary LLM provider) ──────────────────────────────────────
+// NVIDIA NIM exposes an OpenAI-compatible API under integrate.api.nvidia.com/v1.
+// When NVIDIA_API_KEY is present it takes priority over OpenRouter.
+
+const NVIDIA_BASE_DEFAULT = "https://integrate.api.nvidia.com/v1";
+
+export function nvidiaConfigured(): boolean {
+  return !!process.env["NVIDIA_API_KEY"];
+}
+
+// ─── Helicone (observability proxy) ─────────────────────────────────────────
+// Helicone sits transparently in front of the LLM provider: same OpenAI-
+// compatible API, but the base host changes and a Helicone-Auth header is
+// added. When no Helicone key is configured we fall through directly.
 
 const OPENROUTER_DIRECT = "https://openrouter.ai/api/v1";
 const OPENROUTER_VIA_HELICONE = "https://openrouter.helicone.ai/api/v1";
@@ -37,9 +47,42 @@ export function heliconeEnabled(): boolean {
   return !!process.env["HELICONE_API_KEY"];
 }
 
-/** The LLM base URL to use — Helicone proxy when configured, else OpenRouter. */
+/**
+ * The LLM base URL to use.
+ * Priority: NVIDIA NIM (when NVIDIA_API_KEY set) → Helicone proxy → OpenRouter direct.
+ */
 export function llmBaseUrl(): string {
+  if (nvidiaConfigured()) {
+    return (process.env["NVIDIA_BASE_URL"] ?? NVIDIA_BASE_DEFAULT).replace(/\/$/, "");
+  }
   return heliconeEnabled() ? OPENROUTER_VIA_HELICONE : OPENROUTER_DIRECT;
+}
+
+/**
+ * Unified LLM auth + content headers. Picks NVIDIA or OpenRouter automatically.
+ * Spreads Helicone headers on top when Helicone is configured (works with both
+ * providers). Throws a descriptive error when neither key is set.
+ */
+export function llmHeaders(extra?: Record<string, string>): Record<string, string> {
+  const nvidiaKey = process.env["NVIDIA_API_KEY"];
+  if (nvidiaKey) {
+    return {
+      "Authorization": `Bearer ${nvidiaKey}`,
+      "Content-Type": "application/json",
+      ...heliconeHeaders(),
+      ...extra,
+    };
+  }
+  const orKey = process.env["OPENROUTER_API_KEY"];
+  if (!orKey) throw new Error("No LLM API key configured — set NVIDIA_API_KEY or OPENROUTER_API_KEY");
+  return {
+    "Authorization": `Bearer ${orKey}`,
+    "Content-Type": "application/json",
+    "HTTP-Referer": "https://aura-omega-ui.abbyaura.io",
+    "X-Title": "AURA-OMEGA",
+    ...heliconeHeaders(),
+    ...extra,
+  };
 }
 
 /**
@@ -584,7 +627,8 @@ export interface IntegrationStatus {
 export function integrationStatus(): IntegrationStatus[] {
   const has = (k: string) => !!process.env[k];
   return [
-    { key: "openrouter", name: "OpenRouter", category: "llm", envVar: "OPENROUTER_API_KEY", configured: has("OPENROUTER_API_KEY") },
+    { key: "nvidia", name: "NVIDIA NIM", category: "llm", envVar: "NVIDIA_API_KEY", configured: has("NVIDIA_API_KEY") },
+    { key: "openrouter", name: "OpenRouter (fallback)", category: "llm", envVar: "OPENROUTER_API_KEY", configured: has("OPENROUTER_API_KEY") },
     { key: "helicone", name: "Helicone", category: "observability", envVar: "HELICONE_API_KEY", configured: has("HELICONE_API_KEY") },
     { key: "langsmith", name: "LangSmith (LangChain)", category: "observability", envVar: "LANGSMITH_API_KEY", configured: langsmithEnabled() },
     { key: "embeddings", name: "Embeddings (semantic memory)", category: "memory", envVar: "EMBEDDINGS_API_KEY", configured: has("EMBEDDINGS_API_KEY") },

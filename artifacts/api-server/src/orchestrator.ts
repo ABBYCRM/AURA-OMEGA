@@ -3,7 +3,7 @@
  *
  * This is what makes the swarm REAL instead of scripted text:
  *  - ABBY decomposes an operator goal into concrete per-AURA directives.
- *  - Each target AURA actually executes its directive via its real OpenRouter model.
+ *  - Each target AURA actually executes its directive via NVIDIA NIM (falls back to OpenRouter).
  *  - AURA-2 (browser agent) runs a real Steel scrape when a URL is present and
  *    feeds the real web content back into its reasoning.
  *  - Real messages, tool calls, tasks, monologue lines, agent status, and command

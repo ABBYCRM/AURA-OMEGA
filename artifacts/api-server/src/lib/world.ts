@@ -10,7 +10,7 @@ import { db, pool } from "@workspace/db";
 import { agentsTable, agentCommandsTable, attachmentsTable } from "@workspace/db";
 import { gte } from "drizzle-orm";
 import { logger } from "./logger";
-import { composioConfigured, composioExecuteEnabled, composioExecute, llmBaseUrl } from "./integrations";
+import { composioConfigured, composioExecuteEnabled, composioExecute, llmBaseUrl, llmHeaders, nvidiaConfigured } from "./integrations";
 import { blockIfSensitiveForPublic } from "./safety";
 import { renderTraversalBlock, sliceSixTiles, verifyBlock, renderStoryFrame, verifyNotBlank, renderIntroCard, renderWorldFrame, sliceTiles } from "./worldEngine";
 import { steelScrape } from "../tools";
@@ -182,13 +182,14 @@ export function buildPostCaption(a: AuraState, w: WorldState, voice?: string[] |
 }
 
 async function llmOnce(system: string, user: string, maxTokens = 160): Promise<string | null> {
-  const orKey = process.env["OPENROUTER_API_KEY"];
   const model = process.env["WORLD_VOICE_MODEL"] ?? "";
-  if (!orKey || !model) return null;
+  if (!model || (!nvidiaConfigured() && !process.env["OPENROUTER_API_KEY"])) return null;
+  let headers: Record<string, string>;
+  try { headers = llmHeaders(); } catch { return null; }
   try {
     const r = await fetch(`${llmBaseUrl()}/chat/completions`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${orKey}`, "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.95 }),
       signal: AbortSignal.timeout(20000),
     });

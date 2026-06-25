@@ -20,7 +20,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, channelsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
-import { llmBaseUrl, heliconeHeaders } from "../lib/integrations";
+import { llmBaseUrl, llmHeaders } from "../lib/integrations";
 import { timingSafeStrEqual } from "../lib/auth";
 import { ANTI_HALLUCINATION_DIRECTIVE } from "./ai";
 
@@ -145,18 +145,12 @@ router.post("/external/v1/chat/completions", async (req, res) => {
   }
   if (!agent) { res.status(404).json({ error: `Agent '${model}' not found` }); return; }
 
-  const orKey = process.env["OPENROUTER_API_KEY"];
-  if (!orKey) { res.status(500).json({ error: "OPENROUTER_API_KEY not configured on server" }); return; }
+  let orHeaders: Record<string, string>;
+  try { orHeaders = llmHeaders({ "X-Title": "AURA-OMEGA External API" }); }
+  catch (e) { res.status(500).json({ error: String(e instanceof Error ? e.message : e) }); return; }
 
   const systemPrompt = (AGENT_PERSONAS[agentId] ?? `You are ${agent.name}, an AI agent in the ABBY AURA swarm.`) + ANTI_HALLUCINATION_DIRECTIVE;
   const orMessages = [{ role: "system", content: systemPrompt }, ...messages];
-  const orHeaders = {
-    "Authorization": `Bearer ${orKey}`,
-    "Content-Type": "application/json",
-    "HTTP-Referer": "https://aura-omega-ui.abbyaura.io",
-    "X-Title": "AURA-OMEGA External API",
-    ...heliconeHeaders(),
-  };
 
   // ── Streaming response ───────────────────────────────────────────────────
   if (stream) {
