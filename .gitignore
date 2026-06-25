@@ -32,6 +32,9 @@ node_modules
 .env.*
 !.env.example
 
+# Runtime settings file — instance-specific, never commit (would overwrite production state)
+.aura-omega-settings.json
+
 # misc
 /.sass-cache
 /connect.lock
