@@ -47,5 +47,9 @@ npx --yes pnpm@9 run typecheck:libs
 echo "=== Building API server ==="
 npx --yes pnpm@9 --filter @workspace/api-server run build
 
+echo "=== Building frontend UI ==="
+PORT=5000 BASE_PATH=/ npx --yes pnpm@9 --filter @workspace/aura-omega-ui run build
+
 echo "=== BUILD COMPLETE ==="
 ls -la artifacts/api-server/dist/
+ls -la artifacts/aura-omega-ui/dist/public/ 2>/dev/null || echo "WARNING: UI dist missing"
