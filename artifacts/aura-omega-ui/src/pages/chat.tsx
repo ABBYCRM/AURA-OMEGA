@@ -340,14 +340,21 @@ export default function ChatPage() {
 
   return (
     <div className="flex w-full h-full bg-background text-foreground overflow-hidden">
-      {/* ── Conversation sidebar (slide-over drawer on all screen sizes) ── */}
+      {/* ── Conversation sidebar ──
+           Mobile/tablet (< lg): slide-over drawer with backdrop
+           Desktop (lg+): permanent side panel, always in flow            */}
       {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/50 z-30" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+        <div className="lg:hidden fixed inset-0 bg-black/50 z-30" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
       )}
       <aside
         className={cn(
-          "w-72 shrink-0 bg-card border-r border-card-border flex flex-col z-40",
+          "flex flex-col z-40 bg-card border-r border-card-border shrink-0",
+          // Drawer geometry on mobile/tablet
+          "w-[85vw] max-w-xs sm:w-72",
           "fixed inset-y-0 left-0 transition-transform duration-200 shadow-2xl",
+          // Desktop: back in normal flow, always visible
+          "lg:static lg:w-72 lg:inset-auto lg:shadow-none lg:translate-x-0",
+          // State-driven translate (overridden by lg:translate-x-0 above on desktop)
           sidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
         aria-label="Conversations"
@@ -357,7 +364,7 @@ export default function ChatPage() {
             <MessageSquare className="w-4 h-4 text-primary" />
             <span className="text-sm font-semibold">Chats</span>
           </div>
-          <button onClick={() => setSidebarOpen(false)} aria-label="Close menu" className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors">
+          <button onClick={() => setSidebarOpen(false)} aria-label="Close menu" className="lg:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -457,20 +464,21 @@ export default function ChatPage() {
       {/* ── Main column ── */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <header className="h-14 shrink-0 border-b border-card-border flex items-center gap-3 px-4">
+        <header className="h-14 shrink-0 border-b border-card-border flex items-center gap-2 sm:gap-3 px-3 sm:px-4">
+          {/* Menu button: visible on mobile/tablet, hidden on desktop where sidebar is pinned */}
           <button
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open conversations"
-            className="flex items-center gap-1.5 p-2 -ml-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors"
+            onClick={() => setSidebarOpen((v) => !v)}
+            aria-label="Toggle conversations"
+            className="lg:hidden flex items-center gap-1.5 p-2 -ml-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors shrink-0"
           >
             <Menu className="w-5 h-5" />
             <span className="text-sm font-medium hidden sm:inline">Chats</span>
           </button>
           <div className="flex items-center gap-2 min-w-0 flex-1">
-            <Bot className="w-5 h-5 text-primary shrink-0" />
+            <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-primary shrink-0" />
             <div className="min-w-0">
-              <h1 className="text-sm font-semibold truncate">{activeChannel?.name ?? "AURA-OMEGA Operations Console"}</h1>
-              <p className="text-[11px] text-muted-foreground truncate">UI → AURA-OMEGA → governed tools → verified result</p>
+              <h1 className="text-sm font-semibold truncate">{activeChannel?.name ?? "AURA-OMEGA"}</h1>
+              <p className="text-[11px] text-muted-foreground truncate hidden sm:block">UI → AURA-OMEGA → governed tools → verified result</p>
             </div>
           </div>
           <BridgePill status={bridgeStatus} />
@@ -479,7 +487,7 @@ export default function ChatPage() {
             <button
               onClick={() => setExportOpen((v) => !v)}
               aria-label="Export conversation"
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors"
+              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors"
             >
               <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export</span>
             </button>
@@ -497,7 +505,7 @@ export default function ChatPage() {
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
+          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5">
             {activeId == null && !channelsLoading ? (
               <EmptyState onNew={newChat} />
             ) : msgsLoading ? (
@@ -543,7 +551,7 @@ export default function ChatPage() {
 
         {/* Composer */}
         <div className="shrink-0 border-t border-card-border bg-background">
-          <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3">
             {uploading && (
               <div className="mb-2 inline-flex items-center gap-2 rounded-lg border border-card-border bg-card px-2.5 py-1.5 text-sm text-muted-foreground">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -624,7 +632,7 @@ function BridgePill({ status }: { status: { enabled: boolean; tokenConfigured: b
     <div
       title={ready ? `Discord bridge connected to channel ${status?.channelId}` : "Discord bridge needs DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID"}
       className={cn(
-        "hidden sm:flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs border shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
+        "hidden lg:flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs border shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
         ready
           ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
           : "border-amber-400/30 bg-amber-400/10 text-amber-200",
@@ -652,7 +660,7 @@ function MessageRow({ message: m }: { message: { messageType: string; content: s
   if (m.messageType === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary/15 border border-primary/20 px-4 py-2.5">
+        <div className="max-w-[92%] sm:max-w-[85%] rounded-2xl rounded-br-md bg-primary/15 border border-primary/20 px-3 sm:px-4 py-2.5">
           <MessageContent content={m.content} />
         </div>
       </div>
@@ -787,7 +795,7 @@ function EmptyConversation({ onPrompt }: { onPrompt: (p: string) => void }) {
         <h2 className="text-base font-semibold">What should AURA-OMEGA do next?</h2>
         <p className="text-sm text-muted-foreground mt-1">Ask from the UI; Discord remains the transport/source-of-truth in the middle.</p>
       </div>
-      <div className="w-full max-w-md space-y-2">
+      <div className="w-full max-w-md space-y-2 px-1 sm:px-0">
         {prompts.map((p) => (
           <button
             key={p}
