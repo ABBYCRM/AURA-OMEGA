@@ -53,6 +53,15 @@ app.get("/healthz", (_req, res) => {
   res.json({ status: "ok", service: "aura-omega-api" });
 });
 
+// Version endpoint — bump DEPLOY_VERSION in render.yaml to confirm a fresh deploy.
+app.get("/api/version", (_req, res) => {
+  res.json({
+    version: process.env["DEPLOY_VERSION"] ?? "dev",
+    service: "aura-omega-api",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // In production, serve the Vite-built frontend if it was bundled into the image.
 const __filename_app = fileURLToPath(import.meta.url);
 const __dirname_app = path.dirname(__filename_app);

@@ -10,6 +10,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Bump this value to force Render to re-deploy and bust any stale CDN cache.
+      - key: DEPLOY_VERSION
+        value: "20260625-2"
       - key: PORT
         value: 10000
       - key: BASE_PATH
