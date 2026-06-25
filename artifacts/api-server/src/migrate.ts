@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS "agents" (
 
 CREATE TABLE IF NOT EXISTS "channels" (
   "id" serial PRIMARY KEY NOT NULL,
-  "name" text NOT NULL,
+  "name" text NOT NULL UNIQUE,
   "type" text DEFAULT 'general' NOT NULL,
   "description" text,
   "unread_count" integer DEFAULT 0 NOT NULL,
@@ -187,17 +187,24 @@ CREATE TABLE IF NOT EXISTS "world_state" (
 INSERT INTO "world_state" ("id") VALUES (1) ON CONFLICT ("id") DO NOTHING;
 `;
 
+// Idempotent by explicit ID — safe to run on any DB state.
 const SEED_AGENTS = `
-INSERT INTO agents (name, role, description, status, color, avatar_initials, model, capabilities)
+INSERT INTO agents (id, name, role, description, status, color, avatar_initials, model, capabilities)
 VALUES
-  ('ABBY',   'Orchestrator',  'Master orchestrator and directive router',       'idle', '#00e5ff', 'AB', '',                      ARRAY['orchestration','planning','routing']),
-  ('AURA-1', 'Code Executor', 'Code generation and execution specialist',       'idle', '#bf00ff', 'C1', 'qwen/qwen3.7-plus',      ARRAY['code','execution','debugging']),
-  ('AURA-2', 'Browser Agent', 'Web browsing and scraping via Steel',            'idle', '#0066ff', 'C2', '',                       ARRAY['browser','scraping','research']),
-  ('AURA-3', 'Memory & RAG',  'Long-term memory and retrieval',                 'idle', '#00cc88', 'C3', 'qwen/qwen3.7-max',       ARRAY['memory','rag','search']),
-  ('AURA-4', 'API Connector', 'External API integration and automation',        'idle', '#ff6b00', 'C4', '',                       ARRAY['api','integration','automation']),
-  ('AURA-5', 'Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'A5', 'qwen/qwen3.6-plus',      ARRAY['social','communications','engagement'])
+  (1, 'ABBY',   'Orchestrator',  'Master orchestrator and directive router',       'idle', '#00e5ff', 'AB', '',                 ARRAY['orchestration','planning','routing']),
+  (2, 'AURA-1', 'Code Executor', 'Code generation and execution specialist',       'idle', '#bf00ff', 'A1', 'qwen/qwen3-plus',  ARRAY['code','execution','debugging']),
+  (3, 'AURA-2', 'Browser Agent', 'Web browsing and scraping via Steel',            'idle', '#0066ff', 'A2', '',                 ARRAY['browser','scraping','research']),
+  (4, 'AURA-3', 'Memory & RAG',  'Long-term memory and retrieval',                 'idle', '#00cc88', 'A3', 'qwen/qwen3-plus',  ARRAY['memory','rag','search']),
+  (5, 'AURA-4', 'API Connector', 'External API integration and automation',        'idle', '#ff6b00', 'A4', '',                 ARRAY['api','integration','automation']),
+  (6, 'AURA-5', 'Social Agent',  'Social media and communications specialist',     'idle', '#ff2d78', 'A5', 'qwen/qwen3-plus',  ARRAY['social','communications','engagement'])
+ON CONFLICT (id) DO UPDATE SET
+  name            = EXCLUDED.name,
+  role            = EXCLUDED.role,
+  color           = EXCLUDED.color,
+  avatar_initials = EXCLUDED.avatar_initials
 `;
 
+// Idempotent by name — safe to run on any DB state.
 const SEED_CHANNELS = `
 INSERT INTO channels (name, type, description)
 VALUES
@@ -208,6 +215,7 @@ VALUES
   ('aura-3',  'agent',   'AURA-3 memory channel'),
   ('aura-4',  'agent',   'AURA-4 API connector channel'),
   ('aura-5',  'agent',   'AURA-5 social agent channel')
+ON CONFLICT (name) DO NOTHING
 `;
 
 // Real executable tools each agent can call (mirrors AGENT_TOOLS in tools.ts).
@@ -229,12 +237,10 @@ export async function runMigrations(): Promise<void> {
     await client.query(SCHEMA_SQL);
     logger.info("Schema ready");
 
-    const { rows } = await client.query("SELECT COUNT(*) AS n FROM agents");
-    if (parseInt(rows[0].n, 10) === 0) {
-      await client.query(SEED_AGENTS);
-      await client.query(SEED_CHANNELS);
-      logger.info("Default agents and channels seeded");
-    }
+    // Always run — ON CONFLICT clauses make both statements idempotent.
+    await client.query(SEED_AGENTS);
+    await client.query(SEED_CHANNELS);
+    logger.info("Agent and channel seed applied (idempotent)");
 
     // Idempotently sync each agent's real tool capabilities.
     for (const [id, caps] of Object.entries(AGENT_CAPABILITIES)) {
