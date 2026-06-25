@@ -6,7 +6,7 @@ services:
     region: oregon
     branch: main
     # Build source on Render so Discord bridge source changes cannot be missed by a stale dist bundle.
-    buildCommand: ./render-build.sh
+    buildCommand: bash render-build.sh
     startCommand: node artifacts/api-server/dist/index.mjs
     envVars:
       - key: NODE_ENV
