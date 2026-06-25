@@ -28,7 +28,7 @@ services:
         fromDatabase:
           name: aura-omega-db
           property: connectionString
-      - key: OPENROUTER_API_KEY
+      - key: NVIDIA_API_KEY
         sync: false
       - key: STEEL_API_KEY
         sync: false

@@ -27,7 +27,6 @@ import { logger } from "./lib/logger";
 import {
   AGENT_PERSONAS,
   ABBY_ID,
-  OPENROUTER_BASE,
   resolveModel,
   openrouterHeaders,
   ANTI_HALLUCINATION_DIRECTIVE,
@@ -47,7 +46,7 @@ import {
   sanitizeForStorage,
   type ToolContext,
 } from "./tools";
-import { sendInngestEvent, traceLlmRun } from "./lib/integrations";
+import { sendInngestEvent, traceLlmRun, llmBaseUrl } from "./lib/integrations";
 import { groundingProof } from "./lib/grounding";
 
 type Agent = typeof agentsTable.$inferSelect;
@@ -146,7 +145,7 @@ async function completeChat(model: string, system: string, user: string, maxToke
   const startedAt = new Date();
   let r: Response;
   try {
-    r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    r = await fetch(`${llmBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({
@@ -165,8 +164,8 @@ async function completeChat(model: string, system: string, user: string, maxToke
   }
   if (!r.ok) {
     const errText = (await r.text()).slice(0, 200);
-    traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: `OpenRouter ${r.status}: ${errText}` });
-    throw new Error(`OpenRouter ${r.status}: ${errText}`);
+    traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: `LLM ${r.status}: ${errText}` });
+    throw new Error(`LLM ${r.status}: ${errText}`);
   }
   const data = (await r.json()) as {
     choices?: Array<{ message?: { content?: string } }>;
@@ -210,7 +209,7 @@ async function completeChatTurn(
     body["tools"] = tools;
     body["tool_choice"] = "auto";
   }
-  let r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+  let r = await fetch(`${llmBaseUrl()}/chat/completions`, {
     method: "POST",
     headers: openrouterHeaders(),
     body: JSON.stringify(body),
@@ -219,7 +218,7 @@ async function completeChatTurn(
     // Some providers reject function-calling — retry once without tools.
     delete body["tools"];
     delete body["tool_choice"];
-    r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    r = await fetch(`${llmBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify(body),
@@ -227,7 +226,7 @@ async function completeChatTurn(
   }
   if (!r.ok) {
     const errText = (await r.text()).slice(0, 200);
-    throw new Error(`OpenRouter ${r.status}: ${errText}`);
+    throw new Error(`LLM ${r.status}: ${errText}`);
   }
   const data = (await r.json()) as {
     choices?: Array<{ message?: AssistantMessage }>;

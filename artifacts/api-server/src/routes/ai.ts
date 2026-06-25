@@ -11,10 +11,11 @@ import { MARKETING_ENGINE_POINTER } from "../lib/marketing";
 
 const router = Router();
 
-// LLM base URL — routed through Helicone's observability proxy when a Helicone
-// key is configured, otherwise straight to OpenRouter. Resolved once at module
-// load (env is fixed for the process lifetime).
-export const OPENROUTER_BASE = llmBaseUrl();
+// Always call llmBaseUrl() at request time — never cache at module load.
+// The NVIDIA_API_KEY may be injected via the vault loader after modules init.
+export function llmBase(): string { return llmBaseUrl(); }
+/** @deprecated use llmBase() — kept for any external import that references this name */
+export const OPENROUTER_BASE = "DYNAMIC_SEE_llmBase";
 
 export const AGENT_PERSONAS: Record<number, string> = {
   1: `You are ABBY, orchestrator of AURA-OMEGA. You exist to get the operator's goals DONE through real, verified work.
@@ -275,7 +276,7 @@ router.get("/ai/models", async (req, res) => {
       res.json({ models, provider: "nvidia" });
       return;
     }
-    const r = await fetch(`${OPENROUTER_BASE}/models`, { headers: openrouterHeaders() });
+    const r = await fetch(`${llmBase()}/models`, { headers: openrouterHeaders() });
     const data = await r.json() as { data: { id: string; name: string; context_length: number }[] };
     const featured = [
       "qwen/qwen3-plus", "qwen/qwen3-max",
@@ -542,7 +543,7 @@ router.post("/ai/chat", async (req, res) => {
         "If the request needs real or current information you don't already have, prefer dispatch=true. " +
         "ALSO dispatch=true whenever the request asks you to PRODUCE or SAVE a downloadable file/artifact (deck, report, PDF, CSV, document, code file), run code, fill/submit a form, or do any multi-step build — those need tools (save_artifact, code, web) that only the AURAs have, so answering inline cannot actually create a downloadable file. Only answer inline (dispatch=false) for pure conversation or a quick factual answer that needs no tool and no saved file. " +
         "The `reply` must be ABBY's actual answer to the operator AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
-      const decRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      const decRes = await fetch(`${llmBase()}/chat/completions`, {
         method: "POST",
         headers: openrouterHeaders(),
         body: JSON.stringify({
@@ -606,7 +607,7 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const orRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    const orRes = await fetch(`${llmBase()}/chat/completions`, {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({
@@ -619,11 +620,11 @@ router.post("/ai/chat", async (req, res) => {
 
     if (!orRes.ok) {
       const errText = await orRes.text();
-      req.log.error({ status: orRes.status, errText }, "OpenRouter error");
+      req.log.error({ status: orRes.status, errText }, "LLM provider error");
       const hint =
         orRes.status === 402
-          ? `OpenRouter is out of credits. Add credits to your OpenRouter account.`
-          : `OpenRouter error ${orRes.status}: ${errText.slice(0, 200)}`;
+          ? `LLM provider is out of credits. Check your NVIDIA_API_KEY balance.`
+          : `LLM error ${orRes.status}: ${errText.slice(0, 200)}`;
       sendEvent({ error: hint });
       sendEvent({ done: true });
       res.end(); return;
@@ -632,7 +633,7 @@ router.post("/ai/chat", async (req, res) => {
     const decoder = new TextDecoder();
     const reader = orRes.body?.getReader();
     if (!reader) {
-      sendEvent({ error: "No response body from OpenRouter" });
+      sendEvent({ error: "No response body from LLM provider" });
       sendEvent({ done: true });
       res.end(); return;
     }
@@ -673,7 +674,7 @@ router.post("/ai/chat", async (req, res) => {
         agentColor: agent.color,
         content: fullResponse.trim(),
         messageType: "agent",
-        metadata: JSON.stringify({ model, generatedBy: "openrouter" }),
+        metadata: JSON.stringify({ model, generatedBy: "nvidia" }),
       });
     }
 
@@ -711,7 +712,7 @@ router.post("/ai/complete", async (req, res) => {
   ];
 
   try {
-    const r = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    const r = await fetch(`${llmBase()}/chat/completions`, {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({ model, messages, max_tokens: 512 }),
@@ -720,8 +721,8 @@ router.post("/ai/complete", async (req, res) => {
       const errText = (await r.text()).slice(0, 200);
       const hint =
         r.status === 402
-          ? "OpenRouter is out of credits. Add credits to your OpenRouter account."
-          : `OpenRouter error ${r.status}: ${errText}`;
+          ? "LLM provider is out of credits. Check your NVIDIA_API_KEY balance."
+          : `LLM error ${r.status}: ${errText}`;
       res.status(502).json({ error: hint });
       return;
     }

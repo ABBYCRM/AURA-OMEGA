@@ -25,8 +25,7 @@ import { timingSafeStrEqual } from "../lib/auth";
 import { ANTI_HALLUCINATION_DIRECTIVE } from "./ai";
 
 const router = Router();
-// Routed through Helicone when configured (see lib/integrations).
-const OPENROUTER_BASE = llmBaseUrl();
+// Always call llmBaseUrl() at request time — never cache at module load.
 
 const AGENT_NAME_MAP: Record<string, number> = {
   abby:    1,
@@ -166,7 +165,7 @@ router.post("/external/v1/chat/completions", async (req, res) => {
     };
 
     try {
-      const orRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      const orRes = await fetch(`${llmBaseUrl()}/chat/completions`, {
         method: "POST",
         headers: orHeaders,
         body: JSON.stringify({ model: agent.model, stream: true, messages: orMessages, max_tokens }),
@@ -212,7 +211,7 @@ router.post("/external/v1/chat/completions", async (req, res) => {
 
   // ── Non-streaming response ───────────────────────────────────────────────
   try {
-    const orRes = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+    const orRes = await fetch(`${llmBaseUrl()}/chat/completions`, {
       method: "POST",
       headers: orHeaders,
       body: JSON.stringify({ model: agent.model, messages: orMessages, max_tokens }),
