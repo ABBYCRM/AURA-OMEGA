@@ -4,7 +4,7 @@ import { runMigrations } from "./migrate";
 import { loadVaultIntoEnv } from "./lib/vaultEnv";
 import { startKeepAlive } from "./lib/keepAlive";
 import { reconcileStaleWork } from "./orchestrator";
-import { integrationStatus } from "./lib/integrations";
+import { integrationStatus, nvidiaConfigured } from "./lib/integrations";
 import { startScheduler } from "./lib/scheduler";
 import { startInternalAutonomyLoop } from "./lib/n8n/internalAutonomy";
 
@@ -16,8 +16,9 @@ if (!rawPort) {
   );
 }
 
-const REQUIRED_KEYS = ["NVIDIA_API_KEY", "STEEL_API_KEY", "FIRECRAWL_API_KEY"] as const;
+const REQUIRED_KEYS = ["STEEL_API_KEY", "FIRECRAWL_API_KEY"] as const;
 const missingKeys = REQUIRED_KEYS.filter((k) => !process.env[k]);
+if (!nvidiaConfigured()) missingKeys.push("NVIDIA_API_KEY" as never);
 if (missingKeys.length > 0) {
   logger.warn(
     { missingKeys },

@@ -31,7 +31,13 @@ services:
         fromDatabase:
           name: aura-omega-db
           property: connectionString
+      # Primary NVIDIA NIM key. For rate-limit headroom you can ALSO set
+      # NVIDIA_API_KEYS to a comma-separated pool (or NVIDIA_API_KEY_2…_N);
+      # the server round-robins across all of them and auto-rotates past a
+      # throttled/dead key. Values live ONLY in the Render dashboard / vault.
       - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEYS
         sync: false
       - key: STEEL_API_KEY
         sync: false

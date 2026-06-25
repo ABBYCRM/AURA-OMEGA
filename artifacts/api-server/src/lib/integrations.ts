@@ -31,8 +31,47 @@ function clip(s: string, n: number): string {
 
 const NVIDIA_BASE_DEFAULT = "https://integrate.api.nvidia.com/v1";
 
+/**
+ * Collect every configured NVIDIA NIM key, deduped, in priority order. Supports:
+ *   - NVIDIA_API_KEY            — single primary key (back-compat)
+ *   - NVIDIA_API_KEYS           — comma/space/newline-separated pool
+ *   - NVIDIA_API_KEY_2 … _N     — numbered extras
+ * A "Bearer " prefix on any value is tolerated and stripped. Multiple keys give
+ * the free tier real rate-limit headroom: requests round-robin across the pool
+ * and a throttled/dead key rotates to the next one automatically.
+ */
+export function nvidiaKeys(): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw?: string) => {
+    if (!raw) return;
+    for (const part of raw.split(/[\s,]+/)) {
+      const k = part.trim().replace(/^Bearer\s+/i, "");
+      if (k && k.startsWith("nvapi-") && !seen.has(k)) {
+        seen.add(k);
+        out.push(k);
+      }
+    }
+  };
+  add(process.env["NVIDIA_API_KEY"]);
+  add(process.env["NVIDIA_API_KEYS"]);
+  for (let i = 2; i <= 12; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
+  return out;
+}
+
+// Round-robin cursor across the key pool (per-process). Each LLM request advances
+// it so load spreads evenly; callers that hit a 401/429 can request the next key.
+let nvidiaKeyCursor = 0;
+export function nextNvidiaKey(): string | undefined {
+  const keys = nvidiaKeys();
+  if (keys.length === 0) return undefined;
+  const key = keys[nvidiaKeyCursor % keys.length];
+  nvidiaKeyCursor = (nvidiaKeyCursor + 1) % keys.length;
+  return key;
+}
+
 export function nvidiaConfigured(): boolean {
-  return !!process.env["NVIDIA_API_KEY"];
+  return nvidiaKeys().length > 0;
 }
 
 // ─── Helicone (observability proxy) ─────────────────────────────────────────
@@ -64,7 +103,7 @@ export function llmBaseUrl(): string {
  * providers). Throws a descriptive error when neither key is set.
  */
 export function llmHeaders(extra?: Record<string, string>): Record<string, string> {
-  const nvidiaKey = process.env["NVIDIA_API_KEY"];
+  const nvidiaKey = nextNvidiaKey();
   if (nvidiaKey) {
     return {
       "Authorization": `Bearer ${nvidiaKey}`,
@@ -627,7 +666,7 @@ export interface IntegrationStatus {
 export function integrationStatus(): IntegrationStatus[] {
   const has = (k: string) => !!process.env[k];
   return [
-    { key: "nvidia", name: "NVIDIA NIM", category: "llm", envVar: "NVIDIA_API_KEY", configured: has("NVIDIA_API_KEY") },
+    { key: "nvidia", name: `NVIDIA NIM (${nvidiaKeys().length} key${nvidiaKeys().length === 1 ? "" : "s"})`, category: "llm", envVar: "NVIDIA_API_KEY", configured: nvidiaConfigured() },
     { key: "openrouter", name: "OpenRouter (fallback)", category: "llm", envVar: "OPENROUTER_API_KEY", configured: has("OPENROUTER_API_KEY") },
     { key: "helicone", name: "Helicone", category: "observability", envVar: "HELICONE_API_KEY", configured: has("HELICONE_API_KEY") },
     { key: "langsmith", name: "LangSmith (LangChain)", category: "observability", envVar: "LANGSMITH_API_KEY", configured: langsmithEnabled() },
