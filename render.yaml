@@ -106,6 +106,13 @@ services:
       # Value is set in the Render dashboard or the in-app vault — never committed.
       - key: SANDBOX_GITHUB_TOKEN
         sync: false
+      # n8n integration
+      - key: N8N_WEBHOOK_BASE_URL
+        sync: false
+      - key: N8N_WEBHOOK_TOKEN
+        sync: false
+      - key: N8N_API_KEY
+        sync: false
 
 # ⚠️ Keep `plan` IN SYNC with the Render dashboard. A blueprint re-sync applies
 #    the value below, so if it says `free` while the dashboard is on a paid plan,
