@@ -330,27 +330,80 @@ export async function completeChat(
   user: string,
   maxTokens = 800,
 ): Promise<string> {
-  const r = await fetch(`${llmBaseUrl()}/chat/completions`, {
-    method: "POST",
-    headers: llmHeaders(),
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      stream: false,
-      max_tokens: maxTokens,
-    }),
+  // 429-aware retry: walk the NVIDIA key pool on rate-limit / auth errors
+  // before falling back to OpenRouter. Each attempt advances the cursor so
+  // the next call naturally hits a different key, and 1s backoff gives the
+  // per-minute rate-limit window time to roll over.
+  const body = JSON.stringify({
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    stream: false,
+    max_tokens: maxTokens,
   });
-  if (!r.ok) {
-    const errText = (await r.text()).slice(0, 200);
-    throw new Error(`LLM ${r.status}: ${errText}`);
+  const keys = nvidiaKeys();
+  // Try NVIDIA pool first if any keys are configured.
+  for (let attempt = 0; attempt < Math.max(keys.length, 1); attempt++) {
+    const useNvidia = keys.length > 0;
+    const headers = llmHeaders();
+    const base = useNvidia
+      ? (process.env["NVIDIA_BASE_URL"] ?? NVIDIA_BASE_DEFAULT).replace(/\/$/, "")
+      : llmBaseUrl();
+    try {
+      const r = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (r.ok) {
+        const data = (await r.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
+      }
+      // 429 or 401 — rotate the key. If no NVIDIA keys left, fall through to OpenRouter.
+      if ((r.status === 429 || r.status === 401) && keys.length > 0 && attempt < keys.length - 1) {
+        logger.warn({ model, attempt, status: r.status }, "llm 429/401 — rotating NVIDIA key");
+        await new Promise((res) => setTimeout(res, 800 + attempt * 400));
+        continue;
+      }
+      // Non-retryable or final attempt.
+      if ((r.status === 429 || r.status === 401) && process.env["OPENROUTER_API_KEY"]) {
+        logger.warn({ model, status: r.status }, "llm exhausted NVIDIA pool — falling back to OpenRouter");
+        const orR = await fetch(`${OPENROUTER_DIRECT}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env["OPENROUTER_API_KEY"]}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://aura-omega-ui.abbyaura.io",
+            "X-Title": "AURA-OMEGA",
+          },
+          body,
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (orR.ok) {
+          const data = (await orR.json()) as {
+            choices?: Array<{ message?: { content?: string } }>;
+          };
+          return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
+        }
+        throw new Error(`LLM ${orR.status} (OpenRouter fallback): ${(await orR.text()).slice(0, 200)}`);
+      }
+      throw new Error(`LLM ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    } catch (err) {
+      // Network/timeout on this attempt — retry next key.
+      if (attempt < keys.length - 1 && keys.length > 0) {
+        logger.warn({ model, attempt, err: String(err).slice(0, 200) }, "llm attempt failed — rotating");
+        await new Promise((res) => setTimeout(res, 500));
+        continue;
+      }
+      throw err;
+    }
   }
-  const data = (await r.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
+  throw new Error("LLM: no key configured or all attempts exhausted");
 }
 
 // ─── E2B (cloud code-interpreter sandbox) ────────────────────────────────────
