@@ -355,6 +355,85 @@ CREATE INDEX IF NOT EXISTS "openhands_tool_runs_session_idx" ON "openhands_tool_
 CREATE INDEX IF NOT EXISTS "openhands_tool_runs_tool_idx" ON "openhands_tool_runs" ("tool_name");
 `;
 
+// Crawl4AI schema — orchestration rows + per-page records. Idempotent.
+const CRAWL4AI_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "crawl4ai_crawls" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "seeds" jsonb DEFAULT '[]' NOT NULL,
+  "max_depth" integer DEFAULT 0 NOT NULL,
+  "concurrency" integer DEFAULT 4 NOT NULL,
+  "max_pages" integer DEFAULT 25 NOT NULL,
+  "follow_links" boolean DEFAULT false NOT NULL,
+  "memory_key_prefix" text,
+  "memory_tag" text DEFAULT 'crawl4ai' NOT NULL,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "pages_total" integer DEFAULT 0 NOT NULL,
+  "pages_success" integer DEFAULT 0 NOT NULL,
+  "pages_failed" integer DEFAULT 0 NOT NULL,
+  "started_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp,
+  "duration_ms" integer,
+  "metadata" jsonb DEFAULT '{}' NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "crawl4ai_crawls_status_idx" ON "crawl4ai_crawls" ("status");
+CREATE INDEX IF NOT EXISTS "crawl4ai_crawls_started_idx" ON "crawl4ai_crawls" ("started_at");
+
+CREATE TABLE IF NOT EXISTS "crawl4ai_pages" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "crawl_id" integer NOT NULL,
+  "url" text NOT NULL,
+  "label" text,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "bytes" integer,
+  "memory_key" text,
+  "error" text,
+  "duration_ms" integer,
+  "crawled_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "crawl4ai_pages_crawl_idx" ON "crawl4ai_pages" ("crawl_id");
+CREATE INDEX IF NOT EXISTS "crawl4ai_pages_status_idx" ON "crawl4ai_pages" ("status");
+`;
+
+// Mem0 schema — typed facts table (userId, category, entity, attribute, value).
+const MEM0_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "mem0_facts" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "user_id" text DEFAULT 'operator' NOT NULL,
+  "category" text NOT NULL,
+  "entity" text NOT NULL,
+  "attribute" text NOT NULL,
+  "value" text NOT NULL,
+  "confidence" real DEFAULT 0.5 NOT NULL,
+  "source_memory_id" integer,
+  "metadata" jsonb DEFAULT '{}' NOT NULL,
+  "reinforced_at" timestamp DEFAULT now() NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "mem0_facts_user_category_idx" ON "mem0_facts" ("user_id", "category");
+CREATE INDEX IF NOT EXISTS "mem0_facts_user_entity_attr_idx" ON "mem0_facts" ("user_id", "entity", "attribute");
+`;
+
+// Docling schema — parsed documents. Idempotent.
+const DOCLING_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "docling_documents" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "title" text,
+  "source_kind" text NOT NULL,
+  "source_ref" text,
+  "mime_type" text,
+  "format" text NOT NULL,
+  "bytes" integer,
+  "extracted_text" text,
+  "extracted_chars" integer DEFAULT 0 NOT NULL,
+  "metadata" jsonb DEFAULT '{}' NOT NULL,
+  "status" text DEFAULT 'success' NOT NULL,
+  "error" text,
+  "parsed_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "docling_documents_format_idx" ON "docling_documents" ("format");
+CREATE INDEX IF NOT EXISTS "docling_documents_parsed_idx" ON "docling_documents" ("parsed_at");
+`;
+
 export async function runMigrations(): Promise<void> {
   // The connection acquire is INSIDE the try: if the database is unreachable
   // (deleted free-tier DB, cold start, transient network), pool.connect() must
@@ -368,7 +447,10 @@ export async function runMigrations(): Promise<void> {
     await client.query(SCHEMA_SQL);
     await client.query(HERMES_SCHEMA_SQL);
     await client.query(OPENHANDS_SCHEMA_SQL);
-    logger.info("Schema ready (core + hermes + openhands)");
+    await client.query(CRAWL4AI_SCHEMA_SQL);
+    await client.query(MEM0_SCHEMA_SQL);
+    await client.query(DOCLING_SCHEMA_SQL);
+    logger.info("Schema ready (core + hermes + openhands + crawl4ai + mem0 + docling)");
 
     // Always run — ON CONFLICT clauses make both statements idempotent.
     await client.query(SEED_AGENTS);
