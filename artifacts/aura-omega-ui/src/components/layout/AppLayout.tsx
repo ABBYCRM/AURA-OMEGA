@@ -19,6 +19,7 @@ import {
   Sparkles,
   Boxes,
   Smartphone,
+  Rocket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -36,6 +37,7 @@ import { toast } from "sonner";
 const moreNav = [
   { href: "/hermes",      icon: Boxes,         label: "Hermes",        hint: "Runtime · skills · heartbeat" },
   { href: "/remote",      icon: Smartphone,    label: "Remote Control",hint: "BOS-OMEGA devices" },
+  { href: "/missions",    icon: Rocket,        label: "Missions",      hint: "Durable mission kernel" },
   { href: "/agents",      icon: Bot,           label: "Agents",        hint: "ABBY + AURAs" },
   { href: "/tasks",       icon: Network,       label: "Tasks",         hint: "Task queue" },
   { href: "/tools",       icon: Workflow,      label: "Tools",         hint: "Tool matrix" },
