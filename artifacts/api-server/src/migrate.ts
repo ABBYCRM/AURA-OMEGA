@@ -434,6 +434,75 @@ CREATE INDEX IF NOT EXISTS "docling_documents_format_idx" ON "docling_documents"
 CREATE INDEX IF NOT EXISTS "docling_documents_parsed_idx" ON "docling_documents" ("parsed_at");
 `;
 
+// BOS-OMEGA schema — devices, commands, screenshots, install runs. Idempotent.
+const BOS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "bos_devices" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "name" text NOT NULL,
+  "host" text NOT NULL,
+  "adapter" text NOT NULL,
+  "tailscale_ip" text,
+  "rustdesk_id" text,
+  "rustdesk_password" text,
+  "meshcentral_id" text,
+  "guacamole_connection_id" text,
+  "status" text DEFAULT 'unknown' NOT NULL,
+  "last_seen" timestamp,
+  "enabled" boolean DEFAULT true NOT NULL,
+  "metadata" jsonb DEFAULT '{}' NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "bos_devices_host_idx" ON "bos_devices" ("host");
+CREATE INDEX IF NOT EXISTS "bos_devices_adapter_idx" ON "bos_devices" ("adapter");
+CREATE INDEX IF NOT EXISTS "bos_devices_status_idx" ON "bos_devices" ("status");
+
+CREATE TABLE IF NOT EXISTS "bos_commands" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "device_id" integer NOT NULL,
+  "adapter" text NOT NULL,
+  "command" text NOT NULL,
+  "output" text,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "exit_code" integer,
+  "started_at" timestamp,
+  "completed_at" timestamp,
+  "duration_ms" integer,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "bos_commands_device_idx" ON "bos_commands" ("device_id");
+CREATE INDEX IF NOT EXISTS "bos_commands_status_idx" ON "bos_commands" ("status");
+CREATE INDEX IF NOT EXISTS "bos_commands_created_idx" ON "bos_commands" ("created_at");
+
+CREATE TABLE IF NOT EXISTS "bos_screenshots" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "device_id" integer NOT NULL,
+  "adapter" text NOT NULL,
+  "bytes" integer DEFAULT 0 NOT NULL,
+  "width" integer,
+  "height" integer,
+  "storage_key" text,
+  "taken_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "bos_screenshots_device_idx" ON "bos_screenshots" ("device_id");
+CREATE INDEX IF NOT EXISTS "bos_screenshots_taken_idx" ON "bos_screenshots" ("taken_at");
+
+CREATE TABLE IF NOT EXISTS "bos_install_runs" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "device_id" integer,
+  "adapter" text NOT NULL,
+  "script" text NOT NULL,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "output" text,
+  "started_at" timestamp,
+  "completed_at" timestamp,
+  "duration_ms" integer,
+  "created_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "bos_install_runs_device_idx" ON "bos_install_runs" ("device_id");
+CREATE INDEX IF NOT EXISTS "bos_install_runs_adapter_idx" ON "bos_install_runs" ("adapter");
+`;
+
 export async function runMigrations(): Promise<void> {
   // The connection acquire is INSIDE the try: if the database is unreachable
   // (deleted free-tier DB, cold start, transient network), pool.connect() must
@@ -450,7 +519,8 @@ export async function runMigrations(): Promise<void> {
     await client.query(CRAWL4AI_SCHEMA_SQL);
     await client.query(MEM0_SCHEMA_SQL);
     await client.query(DOCLING_SCHEMA_SQL);
-    logger.info("Schema ready (core + hermes + openhands + crawl4ai + mem0 + docling)");
+    await client.query(BOS_SCHEMA_SQL);
+    logger.info("Schema ready (core + hermes + openhands + crawl4ai + mem0 + docling + bos)");
 
     // Always run — ON CONFLICT clauses make both statements idempotent.
     await client.query(SEED_AGENTS);
