@@ -51,9 +51,28 @@ export function buildMissionSteps(goal: string): { steps: MissionStep[]; brain: 
   const isAuthGatedPlatform = AUTH_GATED.test(goal);
   const prependedSteps: MissionStep[] = isAuthGatedPlatform
     ? [
+        // Step 0: cheap self-hosted SearXNG (free, no rate limits)
         {
           index: 0,
-          description: `Public-web search for "${goal}" — operator's fallback rule.`,
+          description: `Free public-web search for "${goal}" via self-hosted SearXNG (operator fallback rule #1).`,
+          engine: "searxng-search" as any,
+          action: "search",
+          args: {
+            query: goal,
+            query_variants: buildQueryVariants(goal),
+            site: extractSite(goal),
+            limit: 30,
+            category: extractCategory(goal),
+            engines: "google,bing,duckduckgo,brave,startpage",
+          },
+          acceptance: "SearXNG fanout returned >=15 unique profile(s) with name, role, company, LinkedIn URL.",
+          maxAttempts: 2,
+          backoffSeconds: 15,
+        },
+        // Step 1: Tavily as paid second-pass for any quota gap
+        {
+          index: 1,
+          description: `Tavily public-web search to fill quota gap on "${goal}" (operator fallback rule #2).`,
           engine: "tavily-search" as any,
           action: "search",
           args: {
@@ -63,7 +82,7 @@ export function buildMissionSteps(goal: string): { steps: MissionStep[]; brain: 
             limit: 30,
             category: extractCategory(goal),
           },
-          acceptance: "Tavily fanout returned >=20 unique profile(s) across variants with name, role, company, LinkedIn URL.",
+          acceptance: "Tavily returned >=5 additional unique profile(s) OR SearXNG step 0 already hit quota.",
           maxAttempts: 2,
           backoffSeconds: 15,
         },

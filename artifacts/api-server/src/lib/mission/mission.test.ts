@@ -103,9 +103,9 @@ describe("retry", () => {
 });
 
 describe("engine registry", () => {
-  it("lists all 10 engines (incl. tavily-search fallback)", () => {
+  it("lists all 11 engines (incl. tavily + searxng fallbacks)", () => {
     expect(listEngines().map((e) => e.name).sort()).toEqual(
-      ["bos-omega", "brain", "crawl4ai", "docling", "hermes", "http", "mem0", "openhands", "shell", "tavily-search"].sort(),
+      ["bos-omega", "brain", "crawl4ai", "docling", "hermes", "http", "mem0", "openhands", "searxng-search", "shell", "tavily-search"].sort(),
     );
   });
 
