@@ -29,12 +29,65 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40).replace(/^-|-$/g, "");
 }
 
+// ── Vague-goal clarification gate (PR #43 extension to the Mission Kernel) ──
+// Generic one-word goals ("report", "help", "do it") with no sourceContext
+// cannot be decomposed into actionable plan steps. Mirror the orchestrator's
+// isVagueGoal() so both swarm paths give the operator one consolidated
+// clarification and do NOT spin up tools.
+const VAGUE_GOAL_PATTERN = /^(\s*(report|make report|build report|analy[sz]e|help|do it|do the thing|what now|huh|fix it|figure it out|handle it|take care of it)\s*[.?!]?\s*)$/i;
+const CLARIFICATION_PROMPT =
+  "Give me the report topic, purpose, audience, format, sources, length, and deadline.";
+
+function isVagueGoal(goal: string, sourceContext?: string | null): boolean {
+  if (sourceContext && sourceContext.trim().length > 32) return false;
+  const g = goal.trim();
+  if (g.length === 0) return true;
+  if (VAGUE_GOAL_PATTERN.test(g)) return true;
+  if (
+    g.length < 14 &&
+    !/\b(make|create|generate|build|write|run|search|find|scrape|send|post|publish|delete|update|call|invoke|deploy|open|push|merge|close|schedule|launch|start|stop|test|verify|analy[sz]e|extract|parse|list|show|describe|explain|compare|map)\b/i.test(g)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function buildSeedUrl(goal: string): string {
   const q = encodeURIComponent(goal);
   return `https://duckduckgo.com/?q=${q}`;
 }
 
-export function buildMissionSteps(goal: string): { steps: MissionStep[]; brain: BrainPlan } {
+export function buildMissionSteps(goal: string, sourceContext?: string | null): { steps: MissionStep[]; brain: BrainPlan } {
+  // Vague-goal clarification gate — short generic commands without source
+  // material cannot be decomposed. Return an empty plan + Brain ABORT so the
+  // route handler posts ONE clarification and does NOT dispatch any step.
+  if (isVagueGoal(goal, sourceContext)) {
+    const brain: BrainPlan = {
+      objective: goal,
+      deliverable: `vague goal: "${goal.trim()}". ${CLARIFICATION_PROMPT}`,
+      taskType: "GENERAL_EXECUTION",
+      gate: "ABORT",
+      status: "BLOCKED",
+      acceptance: [CLARIFICATION_PROMPT],
+      plan: [],
+      evidence: [
+        {
+          label: "BLOCKED",
+          agent: "OMEGA",
+          message: `Refused to dispatch — vague goal "${goal.trim()}".`,
+        },
+      ],
+      activeInference: {
+        hiddenState: "operator intent not specified",
+        observation: `goal="${goal}" sourceContext.length=${sourceContext?.length ?? 0}`,
+        prior: "vague goals require operator input",
+        prediction: "operator will provide specifics",
+        predictionError: "0",
+      },
+    };
+    return { steps: [], brain };
+  }
+
   const brain = createBosOmegaBrainPlan(goal);
   const engine = ENGINE_FOR_TASK_TYPE[brain.taskType] ?? "hermes";
 
