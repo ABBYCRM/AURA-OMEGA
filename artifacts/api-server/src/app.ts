@@ -8,6 +8,8 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { boot as bootMissionKernel } from "./lib/mission";
+import { setHermesToolRunner, setOpenHandsToolRunner } from "./lib/mission";
+import { runTool } from "./tools";
 
 const app: Express = express();
 
@@ -64,8 +66,18 @@ app.use("/api", router);
 // Boot the Mission Kernel so it can resume in-flight missions and listen
 // for in-process step.completed events. Idempotent.
 if (process.env["DISABLE_MISSION_KERNEL"] !== "true") {
+  // Wire the engine tool runners so hermes/openhands engines can call into
+  // the existing TOOL_REGISTRY via runTool(). Agents 1 (ABBY, full authority)
+  // and 2 (AURA-1, code) have the broadest tool access. Missions run as
+  // ABBY by default.
+  setHermesToolRunner(async (tool, args, ctx) =>
+    runTool(tool, args, { agentId: ctx.agentId ?? 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+  );
+  setOpenHandsToolRunner(async (tool, args, ctx) =>
+    runTool(tool, args, { agentId: ctx.agentId ?? 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+  );
   bootMissionKernel();
-  logger.info("Mission Kernel booted");
+  logger.info("Mission Kernel booted (engines: hermes + openhands wired)");
 }
 
 // In production, serve the Vite-built frontend if it was bundled into the image.
