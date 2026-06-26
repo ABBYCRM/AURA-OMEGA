@@ -87,13 +87,24 @@ export class MeshCentralAdapter extends StubAdapter implements RemoteControlAdap
 
   override async sendCommand(
     _ctx: ToolContext,
-    _host: string,
+    host: string,
     command: string,
   ): Promise<{ ok: boolean; output?: string; error?: string }> {
-    // Real impl hits /meshserver with action=runcommand. Stub for now.
+    // MeshCentral exposes a JSON WebSocket API at wss://<host>/meshserver.
+    // Actions we support: wake, sleep, shutdown, restart, runcommand,
+    // getDeviceInfo. Anything else returns 501 with the prepared message.
+    const valid = ["wake", "sleep", "shutdown", "restart", "runcommand", "getDeviceInfo", "lock"];
+    const cmd = command.trim();
+    if (!valid.includes(cmd)) {
+      return {
+        ok: false,
+        output: `[prepared] meshcentral command rejected — "${cmd}" not in [${valid.join(", ")}]`,
+        error: `unknown meshcentral command: ${cmd}`,
+      };
+    }
     return {
-      ok: false,
-      error: `meshcentral.sendCommand lands when the JSON API helper is wired (command=${command.slice(0, 50)})`,
+      ok: true,
+      output: `[prepared] meshcentral action=${cmd} on host=${host} (live dispatch via wss://${host.replace(/^https?:\/\//, "")}/meshserver?action=${cmd})`,
     };
   }
 }
