@@ -291,6 +291,70 @@ CREATE TABLE IF NOT EXISTS "hermes_nudges" (
 CREATE INDEX IF NOT EXISTS "hermes_nudges_status_idx" ON "hermes_nudges" ("status");
 `;
 
+// OpenHands runtime schema — workspaces, sessions, events, tool runs.
+// Idempotent, parallels the hermes_* schema. The user-designed orchestrator
+// decides which runtime (Hermes / OpenHands / others) runs when.
+const OPENHANDS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "openhands_workspaces" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "name" text NOT NULL UNIQUE,
+  "description" text,
+  "repo_url" text,
+  "base_branch" text DEFAULT 'main',
+  "sandbox_kind" text DEFAULT 'local' NOT NULL,
+  "sandbox_config" jsonb DEFAULT '{}' NOT NULL,
+  "agent_backend" text DEFAULT 'openhands' NOT NULL,
+  "status" text DEFAULT 'ready' NOT NULL,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "openhands_workspaces_status_idx" ON "openhands_workspaces" ("status");
+
+CREATE TABLE IF NOT EXISTS "openhands_sessions" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "workspace_id" integer NOT NULL,
+  "goal" text NOT NULL,
+  "channel_id" integer,
+  "parent_session_id" integer,
+  "status" text DEFAULT 'queued' NOT NULL,
+  "outcome" text,
+  "final_answer" text,
+  "started_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp,
+  "duration_ms" integer,
+  "metadata" jsonb DEFAULT '{}' NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "openhands_sessions_workspace_idx" ON "openhands_sessions" ("workspace_id");
+CREATE INDEX IF NOT EXISTS "openhands_sessions_status_idx" ON "openhands_sessions" ("status");
+CREATE INDEX IF NOT EXISTS "openhands_sessions_started_idx" ON "openhands_sessions" ("started_at");
+
+CREATE TABLE IF NOT EXISTS "openhands_events" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "session_id" integer NOT NULL,
+  "kind" text NOT NULL,
+  "role" text,
+  "payload" jsonb DEFAULT '{}' NOT NULL,
+  "sequence" integer NOT NULL,
+  "occurred_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "openhands_events_session_idx" ON "openhands_events" ("session_id");
+CREATE INDEX IF NOT EXISTS "openhands_events_session_seq_idx" ON "openhands_events" ("session_id", "sequence");
+
+CREATE TABLE IF NOT EXISTS "openhands_tool_runs" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "session_id" integer NOT NULL,
+  "tool_name" text NOT NULL,
+  "args" jsonb DEFAULT '{}' NOT NULL,
+  "result_summary" text,
+  "success" integer DEFAULT 0 NOT NULL,
+  "duration_ms" integer,
+  "error" text,
+  "ran_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "openhands_tool_runs_session_idx" ON "openhands_tool_runs" ("session_id");
+CREATE INDEX IF NOT EXISTS "openhands_tool_runs_tool_idx" ON "openhands_tool_runs" ("tool_name");
+`;
+
 export async function runMigrations(): Promise<void> {
   // The connection acquire is INSIDE the try: if the database is unreachable
   // (deleted free-tier DB, cold start, transient network), pool.connect() must
@@ -303,7 +367,8 @@ export async function runMigrations(): Promise<void> {
     logger.info("Running startup migrations...");
     await client.query(SCHEMA_SQL);
     await client.query(HERMES_SCHEMA_SQL);
-    logger.info("Schema ready (core + hermes)");
+    await client.query(OPENHANDS_SCHEMA_SQL);
+    logger.info("Schema ready (core + hermes + openhands)");
 
     // Always run — ON CONFLICT clauses make both statements idempotent.
     await client.query(SEED_AGENTS);
