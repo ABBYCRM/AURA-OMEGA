@@ -13,7 +13,8 @@
  */
 
 import { logger } from "../logger";
-import { resolveModel, completeChat } from "../integrations";
+import { completeChat } from "../integrations";
+import { resolveModel } from "../../routes/ai";
 import type { DistilledSkill, RecordSessionInput } from "./types";
 import { recordSkillRun, findMatchingSkill } from "./skills";
 
