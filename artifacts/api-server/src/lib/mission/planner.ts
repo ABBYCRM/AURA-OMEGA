@@ -133,7 +133,9 @@ function extractCategory(goal: string): string {
  * the count.
  */
 function buildQueryVariants(goal: string): string[] {
-  // Strip site: prefix and trailing connectors
+  // Strip operator-grammar noise so the underlying search engine sees a
+  // clean keyword phrase, not a sentence like
+  //   "scrape linkedin for 30 contacts in plumbers California"
   const cleaned = goal
     .replace(/\bscrape\b/gi, "")
     .replace(/\bfind\b/gi, "")
@@ -144,29 +146,47 @@ function buildQueryVariants(goal: string): string[] {
     .replace(/\bfor\b/gi, "")
     .replace(/\bthe\b/gi, "")
     .replace(/\ba\b/gi, "")
+    .replace(/\bin\b/gi, "")
+    .replace(/\bon\b/gi, "")
+    .replace(/\bof\b/gi, "")
+    .replace(/\b30\b/gi, "")
     .replace(/\s+/g, " ")
     .trim();
-  // Extract the core "vertical" phrase (mass tort, mva, hvac, ssdi)
-  const vertical = cleaned.match(/\b(mass\s?tort|mva|hvac|ssdi)\b/i)?.[0]?.toLowerCase();
-  // Extract role modifiers (lead gen, lead generation, case buyer, supplier, etc.)
-  const role = cleaned.match(/\b(lead\s?gen(?:eration)?|case\s+(?:acquisition\s+)?buyers?|supplier|distributor|wholesale|supply\s+(?:buyer|house)|buyer|intake)\b/i)?.[0]?.toLowerCase();
+  // Extract the core "vertical" phrase (mass tort, mva, hvac, ssdi,
+  // plumbers, dentists, etc.) when present.
+  const vertical = cleaned.match(/\b(mass\s?tort|mva|hvac|ssdi|plumbers?|dentists?|chiropractors?|personal\s+injury|real\s+estate|mortgage|insurance|attorney|lawyer|wholesale|distributor|supplier)\b/i)?.[0]?.toLowerCase();
+  // Extract role modifiers when present.
+  const role = cleaned.match(/\b(lead\s?gen(?:eration)?|case\s+(?:acquisition\s+)?buyers?|supplier|distributor|wholesale|supply\s+(?:buyer|house)|buyer|intake|operator|specialist|agent|broker|manager|owner|founder)\b/i)?.[0]?.toLowerCase();
+  // Geographic / country modifiers.
+  const geo = cleaned.match(/\b(india|philippines|usa|uk|canada|australia|texas|california|florida|new\s+york|arizona|nevada|ohio|georgia)\b/i)?.[0];
   const variants: string[] = [];
   if (vertical && role) {
     variants.push(`${vertical} ${role}`);
     variants.push(`"${vertical}" ${role}`);
+    variants.push(`${vertical} ${role} ${geo || ""}`.trim());
     variants.push(`${vertical} ${role} operator`);
     variants.push(`${vertical} ${role} specialist`);
-    if (/india|philippines/i.test(goal)) {
-      variants.push(`${vertical} ${role} India`);
-      variants.push(`${vertical} ${role} Philippines`);
-    }
-    variants.push(`${vertical} ${role} case study`);
+    variants.push(`${vertical} ${role} ${geo ? geo + " " : ""}case study`.trim());
+  } else if (vertical && geo) {
+    variants.push(`${vertical} ${geo}`);
+    variants.push(`"${vertical}" ${geo}`);
+    variants.push(`${vertical} operator ${geo}`);
+    variants.push(`${vertical} specialist ${geo}`);
+    variants.push(`${vertical} ${geo} directory`);
+    variants.push(`${vertical} ${geo} listings`);
+  } else if (vertical) {
+    variants.push(vertical);
+    variants.push(`"${vertical}"`);
+    variants.push(`${vertical} operator`);
+    variants.push(`${vertical} specialist`);
+    variants.push(`${vertical} directory`);
+    variants.push(`${vertical} listings`);
   } else {
     variants.push(cleaned);
     variants.push(`"${cleaned}"`);
   }
-  // Dedupe + cap to 6 variants (each Tavily call costs ~$0.001)
-  return Array.from(new Set(variants)).slice(0, 6);
+  // Dedupe + cap to 6 variants.
+  return Array.from(new Set(variants.filter((v) => v && v.trim().length > 0))).slice(0, 6);
 }
 
 function enrichOne(

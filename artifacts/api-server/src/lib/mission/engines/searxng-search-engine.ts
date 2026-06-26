@@ -121,9 +121,10 @@ export const searxngSearchEngine: Engine = {
       // search engines (Bing, Yandex) ignore `site:` as a query token but
       // honor `inurl:` for URL-path matching. Combined with a path filter
       // (e.g. /in/), this consistently surfaces LinkedIn profile URLs.
-      const finalQuery = site
-        ? `inurl:${site.replace(/^https?:\/\//, "").replace(/\/$/, "")}${site.includes("linkedin.com") ? "/in/" : ""} ${variant}`
-        : variant;
+      // For non-LinkedIn sites, just use the bare host.
+      const stripped = site.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const pathHint = stripped.includes("linkedin.com") ? "/in/" : "";
+      const finalQuery = site ? `inurl:${stripped}${pathHint} ${variant}` : variant;
       try {
         const url = `${ABBY_SEARCH_URL}/search?` + new URLSearchParams({
           q: finalQuery,
