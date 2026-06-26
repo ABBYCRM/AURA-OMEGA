@@ -1,0 +1,21 @@
+{
+  "name": "@workspace/remote-control",
+  "version": "0.0.1",
+  "private": true,
+  "description": "BOS-OMEGA remote-control orchestrator — runs in api-server, dispatches commands to PC Agents, manages device registry, exposes /api/devices/* routes.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./routes": "./src/routes.ts"
+  },
+  "dependencies": {
+    "@workspace/db": "workspace:*",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
