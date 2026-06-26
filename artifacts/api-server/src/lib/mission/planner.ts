@@ -63,7 +63,7 @@ export function buildMissionSteps(goal: string): { steps: MissionStep[]; brain: 
             site: extractSite(goal),
             limit: 30,
             category: extractCategory(goal),
-            engines: "google,bing,duckduckgo,brave,startpage",
+            engines: "bing,startpage,duckduckgo",
           },
           acceptance: "SearXNG fanout returned >=15 unique profile(s) with name, role, company, LinkedIn URL.",
           maxAttempts: 2,
