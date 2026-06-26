@@ -152,7 +152,11 @@ devicesRouter.post("/:id/connect", async (req, res) => {
     const result = await adapter.connect(toolCtx(), {
       host: dev.host,
       password: dev.rustdeskPassword ?? undefined,
-      options: { rustdeskId: dev.rustdeskId },
+      options: {
+        rustdeskId: dev.rustdeskId,
+        meshcentralId: dev.meshcentralId,
+        connectionId: dev.guacamoleConnectionId,
+      },
     });
     await recordCommand({
       deviceId: id,
@@ -164,6 +168,10 @@ devicesRouter.post("/:id/connect", async (req, res) => {
     if (!result.ok) return res.status(501).json({ ok: false, ...result });
     res.json({ ok: true, device: dev, ...result });
   } catch (err) {
+    const msg = String((err as Error).message);
+    if (/not implemented yet/.test(msg)) {
+      return res.status(501).json({ ok: false, error: msg, status: "not_implemented" });
+    }
     logger.error({ err, id }, "POST /api/devices/:id/connect failed");
     res.status(500).json({ ok: false, error: "connect failed" });
   }
@@ -188,8 +196,15 @@ devicesRouter.post("/:id/command", async (req, res) => {
       status: out.ok ? "success" : "failed",
       durationMs: Date.now() - started,
     });
+    if (!out.ok && out.error && /not implemented/i.test(out.error)) {
+      return res.status(501).json({ ok: false, ...out, status: "not_implemented" });
+    }
     res.json({ ok: out.ok, ...out });
   } catch (err) {
+    const msg = String((err as Error).message);
+    if (/not implemented yet/.test(msg)) {
+      return res.status(501).json({ ok: false, error: msg, status: "not_implemented" });
+    }
     logger.error({ err, id }, "POST /api/devices/:id/command failed");
     res.status(500).json({ ok: false, error: "command failed" });
   }
