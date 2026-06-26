@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@workspace/db": "workspace:*",
+    "drizzle-orm": "catalog:",
     "express": "^5.2.1"
   },
   "devDependencies": {
