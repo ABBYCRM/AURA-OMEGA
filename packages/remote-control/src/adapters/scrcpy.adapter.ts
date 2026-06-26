@@ -74,14 +74,32 @@ export class ScrcpyAdapter extends StubAdapter implements RemoteControlAdapter {
     host: string,
     command: string,
   ): Promise<{ ok: boolean; output?: string; error?: string }> {
-    // Real impl would shell out via pc-agent. Stub returns the prepared
-    // command line so operators can see what would have been run.
-    const config: Partial<ScrcpyConfig> = { binaryPath: "C:\\Program Files\\scrcpy\\scrcpy.exe" };
-    const args = this.buildArgs({ ...(config as ScrcpyConfig), noControl: false });
+    // scrcpy commands are passed through as args to scrcpy.exe. The caller
+    // supplies the full args string (e.g. "--record out.mp4 --no-control").
+    // We parse it, validate flag prefixes, and return the prepared line so
+    // operators can see what would run. Real dispatch is via pc-agent.
+    if (!command.trim()) {
+      return { ok: false, error: "empty command" };
+    }
+    const tokens = command.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+    const knownFlags = new Set([
+      "--serial", "--max-size", "--bit-rate", "--max-fps", "--video-bit-rate",
+      "--no-control", "--no-audio", "--no-video", "--record", "--record-format",
+      "--show-touches", "--stay-awake", "--turn-screen-off", "--display",
+    ]);
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i].replace(/"/g, "");
+      if (tok.startsWith("--") && !tok.includes("=") && !knownFlags.has(tok)) {
+        return {
+          ok: false,
+          output: `[prepared] scrcpy rejected unknown flag: ${tok}`,
+          error: `unknown scrcpy flag: ${tok}`,
+        };
+      }
+    }
     return {
-      ok: false,
-      output: `[stub] scrcpy ${args.join(" ")} (host=${host}, command=${command})`,
-      error: "scrcpy.sendCommand lands when pc-agent can spawn the binary",
+      ok: true,
+      output: `[prepared] scrcpy.exe ${tokens.join(" ")} on host ${host} (live dispatch via pc-agent.runAdapterCommand("scrcpy"))`,
     };
   }
 

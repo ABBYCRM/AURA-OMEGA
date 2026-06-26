@@ -180,6 +180,20 @@ describe("guacamole adapter", () => {
     expect(r.ok).toBe(true);
     expect(r.url).toContain("id=5");
   });
+
+  it("sendCommand accepts valid guacd opcode", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "guac-host", "mouse.move 100,200");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("mouse.move");
+  });
+
+  it("sendCommand rejects unknown guacd opcode", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "guac-host", "shutdown");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("shutdown");
+  });
 });
 
 describe("novnc adapter", () => {
@@ -247,6 +261,20 @@ describe("sunshine adapter", () => {
     expect(r.ok).toBe(true);
     expect(r.url).toContain("moonlight://pair");
   });
+
+  it("sendCommand accepts known sunshine commands", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "https://gaming-pc:47984", "launchApp");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("POST https://gaming-pc:47984/api/launchApp");
+  });
+
+  it("sendCommand rejects unknown sunshine commands", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "https://gaming-pc:47984", "format-c:");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("format-c:");
+  });
 });
 
 describe("scrcpy adapter", () => {
@@ -296,5 +324,27 @@ describe("scrcpy adapter", () => {
     expect(buf[1]).toBe(0x50);
     expect(buf[2]).toBe(0x4e);
     expect(buf[3]).toBe(0x47);
+  });
+
+  it("sendCommand accepts known scrcpy flags", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "host", "--max-size 1920 --record out.mp4");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("scrcpy.exe");
+    expect(r.output).toContain("1920");
+    expect(r.output).toContain("out.mp4");
+  });
+
+  it("sendCommand rejects unknown scrcpy flags", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "host", "--made-up-flag 1");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("--made-up-flag");
+  });
+
+  it("sendCommand rejects empty command", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "host", "   ");
+    expect(r.ok).toBe(false);
   });
 });

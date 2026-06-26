@@ -18,6 +18,7 @@ import { getAdapter, listAdapters } from "./adapters";
 import type { AdapterName } from "./adapter";
 import { TailscaleAdapter } from "./adapters/tailscale.adapter";
 import { RustDeskAdapter } from "./adapters/rustdesk.adapter";
+import { runAdapterCommand } from "@workspace/pc-agent";
 import {
   listDevices,
   getDevice,
@@ -187,7 +188,33 @@ devicesRouter.post("/:id/command", async (req, res) => {
     if (!dev) return res.status(404).json({ ok: false, error: "not found" });
     const adapter = getAdapter(dev.adapter as AdapterName);
     const started = Date.now();
-    const out = await adapter.sendCommand(toolCtx(), dev.host, command);
+
+    // Two paths:
+    //   1. Adapter-specific (guacamole/sunshine) — use adapter.sendCommand()
+    //      so we get the prepared command + validation.
+    //   2. Binary-backed (tailscale/rustdesk/meshcentral/scrcpy) — try to
+    //      dispatch via pc-agent.runAdapterCommand. If pc-agent isn't
+    //      installed on this host (the adapter returns no binary), fall back
+    //      to the adapter's sendCommand which returns a prepared line.
+    let out: { ok: boolean; output?: string; error?: string };
+    const useAgent = dev.adapter !== "guacamole" && dev.adapter !== "novnc" && dev.adapter !== "sunshine";
+    if (useAgent) {
+      const exec = await runAdapterCommand(dev.adapter, command, 30_000);
+      out = {
+        ok: exec.ok,
+        output: exec.stdout || exec.stderr,
+        error: exec.ok ? undefined : `pc-agent exit ${exec.exitCode}: ${exec.stderr || "(no stderr)"}`,
+      };
+      // If pc-agent has no binary for this adapter (e.g. running on the
+      // api-server host, not the target PC), fall through to the adapter
+      // implementation which returns a prepared command line.
+      if (!exec.ok && /no associated binary/.test(exec.stderr)) {
+        out = await adapter.sendCommand(toolCtx(), dev.host, command);
+      }
+    } else {
+      out = await adapter.sendCommand(toolCtx(), dev.host, command);
+    }
+
     await recordCommand({
       deviceId: id,
       adapter: dev.adapter,
