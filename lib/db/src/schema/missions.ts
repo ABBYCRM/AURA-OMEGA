@@ -108,7 +108,8 @@ export type EngineName =
   | "docling"
   | "bos-omega"
   | "http"
-  | "shell";
+  | "shell"
+  | "tavily-search";
 
 /** MissionEvent kinds emitted to the bus. Subscribers wake the kernel. */
 export type MissionEventKind =

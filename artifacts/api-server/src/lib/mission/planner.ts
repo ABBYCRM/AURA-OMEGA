@@ -42,21 +42,58 @@ export function buildMissionSteps(goal: string): { steps: MissionStep[]; brain: 
     return { steps: [], brain };
   }
 
-  const steps: MissionStep[] = brain.plan.map((description, i) => {
-    const enriched = enrichOne(brain, engine, goal, i, description);
-    return {
-      index: i,
-      description,
-      engine,
-      action: enriched.action,
-      args: enriched.args,
-      acceptance: brain.acceptance[i] ?? "At least one piece of verified evidence recorded.",
-      maxAttempts: 3,
-      backoffSeconds: 30 * Math.pow(5, i),
-    };
-  });
+  // Operator's RULE (2026-06-26): when a platform is auth-gated (LinkedIn,
+  // Instagram, Twitter, Glassdoor), the FIRST step is a Tavily public-search
+  // fallback. The planner still schedules a follow-up crawl4ai step for
+  // higher-quality structured scraping, but the kernel records the operator's
+  // rule as evidence: "public-web search happened before auth-gated attempt".
+  const AUTH_GATED = /\b(linkedin|instagram|twitter|x\.com|glassdoor|facebook|tiktok)\b/i;
+  const isAuthGatedPlatform = AUTH_GATED.test(goal);
+  const prependedSteps: MissionStep[] = isAuthGatedPlatform
+    ? [
+        {
+          index: 0,
+          description: `Public-web search for "${goal}" — operator's fallback rule.`,
+          engine: "tavily-search" as any,
+          action: "search",
+          args: { query: goal, site: extractSite(goal), limit: 30, category: extractCategory(goal) },
+          acceptance: "Tavily returned at least one matching profile with name, role, company, LinkedIn URL.",
+          maxAttempts: 2,
+          backoffSeconds: 15,
+        },
+      ]
+    : [];
+
+  const steps: MissionStep[] = prependedSteps.concat(
+    brain.plan.map((description, i) => {
+      const enriched = enrichOne(brain, engine, goal, i, description);
+      return {
+        index: prependedSteps.length + i,
+        description,
+        engine,
+        action: enriched.action,
+        args: enriched.args,
+        acceptance: brain.acceptance[i] ?? "At least one piece of verified evidence recorded.",
+        maxAttempts: 3,
+        backoffSeconds: 30 * Math.pow(5, i),
+      };
+    }),
+  );
 
   return { steps, brain };
+}
+
+/** Extract the platform domain from a goal like "scrape linkedin for X". */
+function extractSite(goal: string): string {
+  const m = goal.match(/\b(linkedin\.com|instagram\.com|twitter\.com|x\.com|glassdoor\.com|facebook\.com|tiktok\.com)\b/i);
+  if (m) return m[1];
+  const m2 = goal.match(/\b(linkedin|instagram|twitter|glassdoor|facebook|tiktok)\b/i);
+  return m2 ? `${m2[1].toLowerCase()}.com` : "linkedin.com";
+}
+
+/** Extract a category slug from the goal text (best-effort). */
+function extractCategory(goal: string): string {
+  return slugify(goal.replace(/\b(scrape|find|get|extract|contacts|profiles|from)\b/gi, "").trim());
 }
 
 function enrichOne(

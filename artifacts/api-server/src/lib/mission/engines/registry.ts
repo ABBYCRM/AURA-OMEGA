@@ -26,6 +26,7 @@ import { httpEngine } from "./http-engine";
 import { mem0Engine } from "./mem0-engine";
 import { openhandsEngine } from "./openhands-engine";
 import { shellEngine } from "./shell-engine";
+import { tavilySearchEngine } from "./tavily-search-engine";
 import type { EngineName } from "@workspace/db";
 import type { MissionStep } from "../types";
 
@@ -54,6 +55,7 @@ const REGISTRY: Record<EngineName, EngineAdapter> = {
   "bos-omega": bosOmegaEngine,
   "http": httpEngine,
   "shell": shellEngine,
+  "tavily-search": tavilySearchEngine,
 };
 
 export function getEngine(name: EngineName): EngineAdapter {
