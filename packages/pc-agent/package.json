@@ -1,0 +1,20 @@
+{
+  "name": "@workspace/pc-agent",
+  "version": "0.0.1",
+  "private": true,
+  "description": "BOS-OMEGA PC Agent — small TS shim that lives on the target Windows PC, spawns adapter binaries when AURA pushes a command.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters": "./src/adapters/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
