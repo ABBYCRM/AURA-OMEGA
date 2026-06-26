@@ -117,8 +117,13 @@ export const searxngSearchEngine: Engine = {
     let firstError: string | null = null;
 
     for (const variant of variants.slice(0, VARIANT_LIMIT)) {
-      // site: filter restricts to a domain; works in SearXNG via Google plugin
-      const finalQuery = site ? `site:${site} ${variant}` : variant;
+      // Site filter: use `inurl:` instead of `site:` because the underlying
+      // search engines (Bing, Yandex) ignore `site:` as a query token but
+      // honor `inurl:` for URL-path matching. Combined with a path filter
+      // (e.g. /in/), this consistently surfaces LinkedIn profile URLs.
+      const finalQuery = site
+        ? `inurl:${site.replace(/^https?:\/\//, "").replace(/\/$/, "")}${site.includes("linkedin.com") ? "/in/" : ""} ${variant}`
+        : variant;
       try {
         const url = `${ABBY_SEARCH_URL}/search?` + new URLSearchParams({
           q: finalQuery,
