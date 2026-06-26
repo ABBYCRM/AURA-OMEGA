@@ -100,7 +100,7 @@ export default function Settings() {
       <div className="mx-auto max-w-6xl space-y-6">
         <header>
           <div className="text-xs font-black uppercase tracking-widest text-primary">Operator settings</div>
-          <h1 className="text-3xl font-black">AURA-OMEGA behavior, models, safety, UX</h1>
+          <h1 className="text-2xl sm:text-3xl font-black break-words">AURA-OMEGA behavior, models, safety, UX</h1>
           <p className="text-muted-foreground">Gemini-style settings for a governed autonomous runtime.</p>
         </header>
 
