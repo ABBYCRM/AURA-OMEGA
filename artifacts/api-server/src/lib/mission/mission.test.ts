@@ -16,6 +16,32 @@ import { listEngines, getEngine } from "./engines/registry";
 import type { MissionStep } from "./types";
 
 describe("planner (brain wrapper)", () => {
+  it("refuses vague 'report' goal with ABORT + zero steps", () => {
+    const { steps, brain } = buildMissionSteps("report");
+    expect(brain.gate).toBe("ABORT");
+    expect(steps.length).toBe(0);
+    expect(brain.deliverable).toMatch(/topic/i);
+  });
+
+  it("refuses 'help', 'do it', 'analyze' as vague without sourceContext", () => {
+    for (const g of ["help", "do it", "analyze", "make report"]) {
+      const { steps, brain } = buildMissionSteps(g);
+      expect(brain.gate, `goal="${g}"`).toBe("ABORT");
+      expect(steps.length, `goal="${g}"`).toBe(0);
+    }
+  });
+
+  it("does NOT mark a real goal vague", () => {
+    const { brain } = buildMissionSteps("find me 30 LinkedIn contacts in HVAC");
+    expect(brain.gate).not.toBe("ABORT");
+  });
+
+  it("sourceContext > 32 chars overrides vague gate", () => {
+    const ctx = "Quarterly operations data for the last 90 days...";
+    const { brain } = buildMissionSteps("report", ctx);
+    expect(brain.gate).not.toBe("ABORT");
+  });
+
   it("produces a 10-step plan for a CODE goal", () => {
     const { steps, brain } = buildMissionSteps("build a typescript server");
     expect(brain.gate).toBe("GO");

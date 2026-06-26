@@ -50,11 +50,30 @@ missionsRouter.post("/", async (req, res) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const goal = String(body.goal ?? "").trim();
   if (!goal) return res.status(400).json({ ok: false, error: "goal required" });
+  const sourceContext = typeof body.sourceContext === "string" ? body.sourceContext : null;
 
   // Pre-plan via Brain so the mission starts with a real plan.
-  const { steps, brain } = buildMissionSteps(goal);
+  const { steps, brain } = buildMissionSteps(goal, sourceContext);
   if (brain.gate === "ABORT") {
-    return res.status(400).json({ ok: false, error: "rejected by tri-state gate", gate: brain.gate });
+    // Vague-goal gate or other ABORT reason. Persist a single clarification
+    // mission row (no steps, no tool calls) so the operator dashboard shows
+    // that the kernel refused and asked for clarification, then return.
+    const reason = brain.deliverable && brain.deliverable.length > 0 ? brain.deliverable : "Give me the report topic, purpose, audience, format, sources, length, and deadline.";
+    const clarification = `Clarification needed before I dispatch the swarm.\n\n${reason}\n\n(Your goal "${goal}" doesn't tell me what to do — give me specifics and I'll run the full swarm.)`;
+    try {
+      const m = await createMission({
+        goal,
+        plan: [],
+        engines: [],
+        desiredState: { clarification, status: "clarification_requested" },
+        context: { taskType: brain.taskType, clarification: true },
+        createdBy: String(body.createdBy ?? "operator"),
+      });
+      return res.status(201).json({ ok: true, mission: m, plan: [], brainGate: brain.gate, clarification });
+    } catch (err) {
+      logger.error({ err }, "POST /api/missions clarification path failed");
+      return res.status(500).json({ ok: false, error: "create failed" });
+    }
   }
   if (brain.gate === "HOLD") {
     return res.status(400).json({ ok: false, error: "blocked by tri-state gate (missing info or unsafe)", gate: brain.gate });
