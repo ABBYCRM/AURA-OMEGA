@@ -9,3 +9,6 @@ export * from "./vault";
 export * from "./attachments";
 export * from "./hermes";
 export * from "./openhands";
+export * from "./crawl4ai";
+export * from "./mem0";
+export * from "./docling";
