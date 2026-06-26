@@ -26,6 +26,8 @@ import {
 } from "./sessions";
 import { getWorkspaceById } from "./workspaces";
 import { appendEvent } from "./events";
+import { planGoal } from "./llm";
+import { executePlan } from "./executor";
 import type { DispatchResult } from "./types";
 
 function getBaseUrl(): string | null {
@@ -88,19 +90,56 @@ export async function dispatchGoal(opts: {
 
   const baseUrl = getBaseUrl();
   if (!baseUrl) {
-    await setSessionStatus(session.id, "queued");
-    logger.info({ sessionId: session.id }, "openhands: session queued (no OPENHANDS_BASE_URL — local-only)");
+    // Local execution path: plan with K2.6, execute via the AURA tool registry.
+    // This mirrors the Hermes runtime pattern — fully in-stack, no upstream needed.
+    await setSessionStatus(session.id, "running");
+    const plan = await planGoal(opts.goal, workspace, session.id);
+    if (!plan) {
+      logger.info({ sessionId: session.id }, "openhands: planner returned null — goal not actionable");
+      await setSessionStatus(session.id, "failed", "failed", "Planner could not produce a concrete plan for this goal.");
+      return {
+        sessionId: session.id,
+        status: "failed",
+        workspace: {
+          id: workspace.id,
+          name: workspace.name,
+          agentBackend: workspace.agentBackend as any,
+          sandboxKind: workspace.sandboxKind as any,
+        },
+        message: "Planner could not produce a concrete plan for this goal (out of scope or ambiguous).",
+      };
+    }
+
+    const result = await executePlan({
+      sessionId: session.id,
+      plan,
+      channelId: opts.channelId ?? null,
+    });
+
+    await setSessionStatus(
+      session.id,
+      result.outcome === "success" ? "success" : result.outcome === "partial" ? "partial" : "failed",
+      result.outcome,
+      result.observationSummary,
+    );
+
+    logger.info({
+      sessionId: session.id,
+      outcome: result.outcome,
+      stepsRun: result.stepsRun,
+      stepsFailed: result.stepsFailed,
+    }, "openhands: local execution complete");
+
     return {
       sessionId: session.id,
-      status: "queued",
+      status: result.outcome === "success" ? "success" : result.outcome === "partial" ? "partial" : "failed",
       workspace: {
         id: workspace.id,
         name: workspace.name,
         agentBackend: workspace.agentBackend as any,
         sandboxKind: workspace.sandboxKind as any,
       },
-      message:
-        "Session queued. OPENHANDS_BASE_URL is not set, so the session stays local until a worker picks it up.",
+      message: `Local execution complete. ${result.stepsRun} steps run, ${result.stepsFailed} failed. Outcome: ${result.outcome}.`,
     };
   }
 

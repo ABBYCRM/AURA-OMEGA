@@ -37,6 +37,8 @@ export {
   recordToolRun,
   toolSuccessRates,
 } from "./events";
+export { planGoal, parsePlanResponse, type PlannedGoal, type PlannedStep } from "./llm";
+export { executePlan } from "./executor";
 export { dispatchGoal } from "./runtime";
 export type {
   OpenhandsSandboxKind,
