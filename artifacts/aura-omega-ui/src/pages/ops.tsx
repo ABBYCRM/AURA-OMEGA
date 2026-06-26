@@ -1,77 +1,314 @@
 import { useEffect, useState } from "react";
-import { apiJson, integrationCatalog, runtimeLanes, toolDomains } from "@/lib/auraConsole";
-import { Activity, BrainCircuit, CheckCircle2, DatabaseZap, Gauge, Play, ShieldCheck, Workflow, Zap } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import {
+  Activity, ArrowRight, Bot, BrainCircuit, CheckCircle2,
+  Circle, Loader2, SendHorizonal, Sparkles, Zap,
+} from "lucide-react";
+import { GOAL_DRAFT_KEY } from "@/lib/handoff";
+import { cn } from "@/lib/utils";
 
-type N8nTask = { id: string; name: string; trigger: string; webhookPath: string; ownerAgent: string; enabled: boolean; tags: string[]; priority: string };
-type Heartbeat = { running?: boolean; jobs?: Array<{ id: string; name: string; intervalMs: number; enabled: boolean }> };
+type AgentStatus = "idle" | "running" | "error" | "offline";
 
-function Stat({ label, value, hint }: { label: string; value: string | number; hint: string }) {
-  return <div className="rounded-2xl border border-card-border bg-card/60 p-4 shadow-sm"><div className="text-2xl font-black">{value}</div><div className="text-xs font-bold uppercase tracking-wider text-muted-foreground">{label}</div><div className="mt-1 text-xs text-muted-foreground">{hint}</div></div>;
+interface Agent {
+  id: number;
+  name: string;
+  role: string;
+  status: AgentStatus;
+  color: string;
+  avatarInitials: string;
 }
 
+interface Task {
+  id: number;
+  title?: string;
+  objective?: string;
+  status: string;
+  agentName?: string | null;
+}
+
+const PLACEHOLDER_AGENTS: Agent[] = [
+  { id: 1, name: "ABBY",   role: "Orchestrator",    status: "idle", color: "#22d3ee", avatarInitials: "AB" },
+  { id: 2, name: "AURA-1", role: "Code & Deploy",   status: "idle", color: "#a78bfa", avatarInitials: "A1" },
+  { id: 3, name: "AURA-2", role: "Research & Web",  status: "idle", color: "#34d399", avatarInitials: "A2" },
+  { id: 4, name: "AURA-3", role: "Content & CRM",   status: "idle", color: "#f59e0b", avatarInitials: "A3" },
+  { id: 5, name: "AURA-4", role: "Data & Analytics",status: "idle", color: "#f472b6", avatarInitials: "A4" },
+  { id: 6, name: "AURA-5", role: "Automation & n8n",status: "idle", color: "#fb923c", avatarInitials: "A5" },
+];
+
+function StatusDot({ status }: { status: AgentStatus }) {
+  return (
+    <span className={cn(
+      "w-2 h-2 rounded-full shrink-0",
+      status === "running" ? "bg-blue-400 animate-pulse" :
+      status === "error"   ? "bg-red-400" :
+      status === "offline" ? "bg-muted-foreground/40" :
+                             "bg-emerald-400",
+    )} />
+  );
+}
+
+function TaskStatusIcon({ status }: { status: string }) {
+  if (status === "running" || status === "queued")
+    return <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0 mt-0.5" />;
+  if (status === "completed")
+    return <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />;
+  return <Circle className="w-4 h-4 text-muted-foreground/30 shrink-0 mt-0.5" />;
+}
+
+function taskBadge(status: string) {
+  if (status === "running" || status === "queued")
+    return "bg-blue-400/10 text-blue-400 border border-blue-400/20";
+  if (status === "completed")
+    return "bg-emerald-400/10 text-emerald-400 border border-emerald-400/20";
+  if (status === "failed")
+    return "bg-red-400/10 text-red-400 border border-red-400/20";
+  return "bg-muted/60 text-muted-foreground border border-border";
+}
+
+const SUGGESTIONS = [
+  "Research AI marketing trends and write a LinkedIn post",
+  "Build a landing page for a new product",
+  "Summarize and reply to unread emails",
+  "Create a 30-day social media content calendar",
+  "Scrape competitor pricing and make a comparison table",
+  "Deploy the latest build to Render",
+];
+
 export default function OpsPage() {
-  const [tasks, setTasks] = useState<N8nTask[]>([]);
-  const [heartbeat, setHeartbeat] = useState<Heartbeat | null>(null);
-  const [objective, setObjective] = useState("Fix code, verify build, deploy to Render, then report evidence.");
-  const [plan, setPlan] = useState<any>(null);
+  const [, navigate] = useLocation();
+  const [goal, setGoal] = useState("");
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [heartbeat, setHeartbeat] = useState<"online" | "offline" | "unknown">("unknown");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    apiJson<{ tasks: N8nTask[] }>("/api/n8n/tasks").then((x) => setTasks(x.tasks || [])).catch(() => setTasks([]));
-    apiJson<Heartbeat>("/api/n8n/autonomy/heartbeat").then(setHeartbeat).catch(() => setHeartbeat(null));
+    fetch("/api/agents")
+      .then((r) => r.ok ? r.json() : [])
+      .then((d) => setAgents(Array.isArray(d) ? d : []))
+      .catch(() => {});
+
+    fetch("/api/tasks")
+      .then((r) => r.ok ? r.json() : {})
+      .then((d) => {
+        const list = Array.isArray(d?.tasks) ? d.tasks : Array.isArray(d) ? d : [];
+        setTasks(list.slice(0, 6));
+      })
+      .catch(() => {});
+
+    fetch("/api/n8n/autonomy/heartbeat")
+      .then((r) => setHeartbeat(r.ok ? "online" : "offline"))
+      .catch(() => setHeartbeat("offline"));
   }, []);
 
-  async function planObjective() {
-    const out = await apiJson("/api/n8n/autonomous/plan", { method: "POST", body: JSON.stringify({ objective }) });
-    setPlan(out);
+  function launch() {
+    const trimmed = goal.trim();
+    if (!trimmed) return;
+    setSubmitting(true);
+    try { sessionStorage.setItem(GOAL_DRAFT_KEY, trimmed); } catch { /* storage blocked */ }
+    navigate("/chat");
   }
 
-  const activeIntegrations = integrationCatalog.filter((x) => x.configured).length;
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); launch(); }
+  }
+
+  const displayAgents = agents.length ? agents : PLACEHOLDER_AGENTS;
+  const runningAgents = displayAgents.filter((a) => a.status === "running").length;
+  const activeTasks = tasks.filter((t) => t.status === "running" || t.status === "queued").length;
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="rounded-3xl border border-primary/20 bg-card/50 p-6 lg:p-8 overflow-hidden relative">
-          <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_15%_20%,rgba(139,92,246,.20),transparent_24rem),radial-gradient(circle_at_85%_10%,rgba(34,211,238,.12),transparent_22rem)]" />
-          <div className="relative grid gap-6 lg:grid-cols-[1.2fr_.8fr] items-center">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-bold text-primary"><BrainCircuit className="w-4 h-4" /> AURA-OMEGA AGENTIC OPERATIONS CONSOLE</div>
-              <h1 className="mt-4 text-4xl lg:text-5xl font-black tracking-tight">Not chat. Mission control.</h1>
-              <p className="mt-3 max-w-3xl text-muted-foreground">Operate BOS-OMEGA, Kimi planner, 60 n8n tools, heartbeat autonomy, memory, coding/GitHub/Render/VPS lanes, and provider integrations from one UI.</p>
-              <div className="mt-5 flex flex-wrap gap-2">{toolDomains.slice(0, 12).map((d) => <span key={d} className="rounded-full border border-card-border bg-background/60 px-3 py-1 text-xs font-bold uppercase text-muted-foreground">{d}</span>)}</div>
+    <div className="flex-1 overflow-y-auto bg-background text-foreground">
+      <div className="min-h-full flex flex-col">
+
+        {/* ── Hero: centered goal input ── */}
+        <div className="flex-1 flex flex-col items-center justify-center px-4 pt-16 pb-10">
+          <div className="w-full max-w-2xl">
+
+            {/* Brand mark */}
+            <div className="flex flex-col items-center text-center mb-10">
+              <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-5 shadow-lg shadow-primary/10">
+                <BrainCircuit className="w-8 h-8 text-primary" />
+              </div>
+              <h1 className="text-3xl font-black tracking-tight">What should AURA-OMEGA do?</h1>
+              <p className="mt-2 text-muted-foreground text-sm max-w-sm">
+                Describe a goal. The swarm plans, delegates to agents, and gets it done.
+              </p>
             </div>
-            <div className="rounded-2xl border border-card-border bg-background/70 p-4">
-              <div className="text-sm font-bold mb-2 flex items-center gap-2"><Workflow className="w-4 h-4 text-primary" /> Quick autonomous plan</div>
-              <textarea value={objective} onChange={(e) => setObjective(e.target.value)} className="h-24 w-full rounded-xl border border-card-border bg-background p-3 text-sm outline-none focus:border-primary" />
-              <button onClick={planObjective} className="mt-3 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground hover:opacity-90"><Play className="w-4 h-4" /> Plan with Tool Matrix</button>
-              {plan && <pre className="mt-3 max-h-56 overflow-auto rounded-xl bg-black/30 p-3 text-[11px] text-muted-foreground">{JSON.stringify(plan, null, 2)}</pre>}
+
+            {/* Goal composer */}
+            <div className="rounded-2xl border border-border bg-card shadow-lg focus-within:border-primary/60 focus-within:shadow-[0_0_0_3px_rgba(139,92,246,0.10)] transition-all">
+              <textarea
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                onKeyDown={onKey}
+                rows={3}
+                placeholder="e.g. Research AI marketing trends and write a post for LinkedIn…"
+                className="w-full resize-none bg-transparent px-5 pt-4 pb-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/50"
+              />
+              <div className="flex items-center justify-between px-4 pb-3 pt-1">
+                <span className="text-[11px] text-muted-foreground/40 hidden sm:block">
+                  ⏎ to launch · Shift+⏎ for new line
+                </span>
+                <button
+                  onClick={launch}
+                  disabled={!goal.trim() || submitting}
+                  className="ml-auto flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-bold disabled:opacity-40 hover:-translate-y-0.5 active:translate-y-0 transition-all shadow-[0_10px_28px_rgba(139,92,246,0.35),inset_0_1px_0_rgba(255,255,255,0.22)]"
+                >
+                  {submitting
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <SendHorizonal className="w-4 h-4" />}
+                  Launch
+                </button>
+              </div>
+            </div>
+
+            {/* Suggestion chips */}
+            <div className="mt-4 flex flex-wrap gap-2 justify-center">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setGoal(s)}
+                  className="rounded-full border border-border bg-card/60 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 hover:bg-card transition-all"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
           </div>
-        </section>
+        </div>
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="n8n tools" value={tasks.length || 60} hint="Registered workflow hands" />
-          <Stat label="providers" value={`${activeIntegrations}/${integrationCatalog.length}`} hint="Configured provider lanes" />
-          <Stat label="heartbeat" value={heartbeat?.running ? "ON" : "DRY"} hint={`${heartbeat?.jobs?.length || 4} internal cron self-checks`} />
-          <Stat label="runtime" value="AURA" hint="BOS governor + tool router" />
-        </section>
+        {/* ── Status + roster ── */}
+        <div className="px-4 pb-6 max-w-5xl mx-auto w-full space-y-4">
 
-        <section className="grid gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2 rounded-2xl border border-card-border bg-card/50 p-5">
-            <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-black flex items-center gap-2"><Activity className="w-5 h-5 text-primary" /> Runtime lanes</h2><span className="text-xs text-muted-foreground">Live-ready architecture map</span></div>
-            <div className="grid gap-3 md:grid-cols-2">{runtimeLanes.map((lane) => <div key={lane.name} className="rounded-xl border border-card-border bg-background/50 p-4"><div className="flex items-center justify-between gap-3"><div className="font-bold">{lane.name}</div><span className="rounded-full border border-card-border px-2 py-0.5 text-[10px] font-bold uppercase text-muted-foreground">{lane.status}</span></div><p className="mt-1 text-xs text-muted-foreground">{lane.role}</p></div>)}</div>
+          {/* Status strip */}
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              {
+                label: "Swarm",
+                value: `${displayAgents.length} agents`,
+                sub: runningAgents > 0 ? `${runningAgents} running` : "All idle",
+                icon: <Bot className="w-4 h-4 text-primary" />,
+              },
+              {
+                label: "Tasks",
+                value: activeTasks > 0 ? `${activeTasks} active` : "No active tasks",
+                sub: tasks.length > 0 ? `${tasks.length} recent` : "None yet",
+                icon: <Activity className="w-4 h-4 text-accent" />,
+              },
+              {
+                label: "System",
+                value: heartbeat === "online" ? "Online" : heartbeat === "offline" ? "Offline" : "Checking…",
+                sub: "BOS Governor",
+                icon: <Zap className={cn("w-4 h-4", heartbeat === "online" ? "text-emerald-400" : "text-muted-foreground")} />,
+              },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-2xl border border-card-border bg-card/50 p-4 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-primary/8 border border-primary/15 flex items-center justify-center shrink-0">
+                  {stat.icon}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold truncate">{stat.value}</div>
+                  <div className="text-[11px] text-muted-foreground truncate">{stat.sub}</div>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="rounded-2xl border border-card-border bg-card/50 p-5">
-            <h2 className="text-lg font-black flex items-center gap-2"><ShieldCheck className="w-5 h-5 text-emerald-400" /> Execution rules</h2>
-            <div className="mt-4 space-y-3 text-sm text-muted-foreground">
-              {["LLM proposes, BOS approves.", "Tool calls require input gates.", "High-risk actions need policy review.", "Results get verified before DONE.", "Secrets stay write-only and redacted."].map((x) => <div key={x} className="flex gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400 mt-0.5" /><span>{x}</span></div>)}
+
+          {/* Agent roster + Recent tasks */}
+          <div className="grid gap-4 lg:grid-cols-2">
+
+            {/* Agent roster */}
+            <div className="rounded-2xl border border-card-border bg-card/50 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-bold text-sm flex items-center gap-2">
+                  <Bot className="w-4 h-4 text-primary" /> Agent swarm
+                </h2>
+                <Link href="/agents">
+                  <span className="text-xs text-primary hover:underline flex items-center gap-1 cursor-pointer">
+                    View all <ArrowRight className="w-3 h-3" />
+                  </span>
+                </Link>
+              </div>
+              <div className="space-y-2">
+                {displayAgents.map((agent) => (
+                  <div
+                    key={agent.id}
+                    className="flex items-center gap-3 rounded-xl border border-card-border bg-background/50 px-3 py-2.5"
+                  >
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0"
+                      style={{
+                        backgroundColor: `${agent.color}18`,
+                        color: agent.color,
+                        border: `1.5px solid ${agent.color}40`,
+                      }}
+                    >
+                      {agent.avatarInitials}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold truncate" style={{ color: agent.color }}>
+                        {agent.name}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground truncate">{agent.role}</div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <StatusDot status={agent.status as AgentStatus} />
+                      <span className="text-[10px] text-muted-foreground capitalize">{agent.status}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Recent tasks */}
+            <div className="rounded-2xl border border-card-border bg-card/50 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-bold text-sm flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-primary" /> Recent tasks
+                </h2>
+                <Link href="/tasks">
+                  <span className="text-xs text-primary hover:underline flex items-center gap-1 cursor-pointer">
+                    View all <ArrowRight className="w-3 h-3" />
+                  </span>
+                </Link>
+              </div>
+              {tasks.length === 0 ? (
+                <div className="flex flex-col items-center py-8 gap-2 text-center">
+                  <Circle className="w-8 h-8 text-muted-foreground/20" />
+                  <p className="text-sm text-muted-foreground">No tasks yet.</p>
+                  <p className="text-xs text-muted-foreground/60">Launch a goal above to get started.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {tasks.map((task) => (
+                    <div
+                      key={task.id}
+                      className="flex items-start gap-3 rounded-xl border border-card-border bg-background/50 px-3 py-2.5"
+                    >
+                      <TaskStatusIcon status={task.status} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium truncate">
+                          {task.title || task.objective || "Unnamed task"}
+                        </div>
+                        {task.agentName && (
+                          <div className="text-[11px] text-muted-foreground">{task.agentName}</div>
+                        )}
+                      </div>
+                      <span className={cn("text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 capitalize", taskBadge(task.status))}>
+                        {task.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        </section>
+        </div>
 
-        <section className="rounded-2xl border border-card-border bg-card/50 p-5">
-          <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-black flex items-center gap-2"><DatabaseZap className="w-5 h-5 text-accent" /> Tool coverage</h2><span className="text-xs text-muted-foreground">Coding, web, GitHub, Render, VPS, Discord, CRM, media, memory</span></div>
-          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">{(tasks.length ? tasks : []).slice(0, 12).map((task) => <div key={task.id} className="rounded-xl border border-card-border bg-background/50 p-3"><div className="flex justify-between gap-2"><strong className="text-sm">{task.name}</strong><span className="text-[10px] text-muted-foreground">{task.id}</span></div><div className="mt-1 text-xs text-muted-foreground">{task.webhookPath}</div></div>)}{!tasks.length && <div className="text-sm text-muted-foreground">API offline in preview; registry is included in source.</div>}</div>
-        </section>
+        <div className="py-4 text-center text-[10px] text-muted-foreground/30 select-none">
+          AURA-OMEGA · BOS Governor · governed autonomous runtime
+        </div>
       </div>
     </div>
   );
