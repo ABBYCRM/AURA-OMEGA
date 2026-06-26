@@ -75,11 +75,12 @@ happened — while the real `RENDER_API_KEY` sat in the vault the whole time.
 - One feature branch per task, named `YYYY-MM-DD-what-changed`, branched from the
   latest `main`, existing function preserved. Set git identity before committing.
 
-## 6. Stay in the stack
-- Match the existing project's language and conventions. This is a
-  **TypeScript / pnpm monorepo.**
-- Never introduce a foreign stack (Flask `app.py`, `requirements.txt`, `Procfile`,
-  Python) into it. If a directive implies that, it's a misread — stop and confirm.
+## 6. Stay in the stack — REMOVED 2026-06-25
+
+This rule was removed by operator directive on branch
+`2026-06-25-remove-foreign-stack-rule`. Foreign stacks (Python, Flask,
+`requirements.txt`, `Procfile`, anything) are now permitted in this repo.
+The operator may re-impose stack constraints per project as needed.
 
 ## 7. Scope & target
 - Confirm **which** repo/account you were given before acting; act only on that one.
