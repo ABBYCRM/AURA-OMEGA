@@ -5,86 +5,283 @@ import {
   BrainCircuit,
   CalendarClock,
   KeyRound,
-  LayoutDashboard,
   MessageSquare,
   MoreHorizontal,
   Network,
-  ServerCog,
   Settings as SettingsIcon,
   ShieldCheck,
   Workflow,
   X,
+  Plus,
+  Pencil,
+  Trash2,
+  ServerCog,
+  Sparkles,
+  Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
+import {
+  useListChannels,
+  useCreateChannel,
+  getListChannelsQueryKey,
+  resolveApiUrl,
+} from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 
-const primaryNav = [
-  { href: "/",           icon: LayoutDashboard, label: "Ops",     hint: "Mission control" },
-  { href: "/chat",       icon: MessageSquare,   label: "Chat",    hint: "Command surface" },
-  { href: "/swarm",      icon: Activity,        label: "Swarm",   hint: "Live agent activity" },
-  { href: "/tasks",      icon: Network,         label: "Tasks",   hint: "Task queue" },
-  { href: "/agents",     icon: Bot,             label: "Agents",  hint: "Agent roster" },
+// Manus-style navigation: chat threads live on the left rail, everything else
+// sits behind a single "More" drawer. No theatrical 12-link sidebar.
+const moreNav = [
+  { href: "/hermes",      icon: Boxes,         label: "Hermes",        hint: "Runtime · skills · heartbeat" },
+  { href: "/agents",      icon: Bot,           label: "Agents",        hint: "ABBY + AURAs" },
+  { href: "/tasks",       icon: Network,       label: "Tasks",         hint: "Task queue" },
+  { href: "/tools",       icon: Workflow,      label: "Tools",         hint: "Tool matrix" },
+  { href: "/cron",        icon: CalendarClock, label: "Cron",          hint: "Scheduled jobs" },
+  { href: "/runtimes",    icon: ServerCog,     label: "Runtimes",      hint: "LLM providers" },
+  { href: "/integrations",icon: KeyRound,      label: "Integrations",  hint: "Composio · Firecrawl · Steel" },
+  { href: "/settings",    icon: SettingsIcon,  label: "Settings",      hint: "Operator controls" },
 ];
-
-const toolsNav = [
-  { href: "/tools",      icon: Workflow,        label: "Tools",       hint: "Tool matrix & n8n" },
-  { href: "/scheduled",  icon: CalendarClock,   label: "Scheduled",   hint: "Cron & heartbeat" },
-  { href: "/runtimes",   icon: ServerCog,       label: "Runtimes",    hint: "LLM & execution lanes" },
-];
-
-const configNav = [
-  { href: "/integrations", icon: KeyRound,       label: "Integrations", hint: "Providers & secrets" },
-  { href: "/settings",     icon: SettingsIcon,   label: "Settings",     hint: "Operator controls" },
-];
-
-const allNav = [...primaryNav, ...toolsNav, ...configNav];
 
 function isActive(location: string, href: string) {
   if (href === "/") return location === "/";
   return location === href || location.startsWith(`${href}/`);
 }
 
-function NavItem({ item, location, compact = false }: { item: typeof primaryNav[0]; location: string; compact?: boolean }) {
-  const active = isActive(location, item.href);
+function MoreDrawer({
+  open,
+  onClose,
+  location,
+}: {
+  open: boolean;
+  onClose: () => void;
+  location: string;
+}) {
+  if (!open) return null;
   return (
-    <Link href={item.href} data-testid={`nav-${item.label.toLowerCase()}`}>
+    <>
       <div
-        title={item.hint}
-        aria-current={active ? "page" : undefined}
+        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
         className={cn(
-          "group flex items-center gap-3 rounded-xl px-3 py-2.5 cursor-pointer transition-all duration-150 select-none",
-          compact && "justify-center gap-0 px-2",
-          active
-            ? "bg-primary/12 text-primary"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          "fixed top-0 left-0 bottom-0 z-50 w-72 bg-card border-r border-border",
+          "flex flex-col",
         )}
+        role="dialog"
+        aria-label="More navigation"
       >
-        <item.icon
-          className={cn("shrink-0 transition-colors", compact ? "w-5 h-5" : "w-[18px] h-[18px]")}
-          strokeWidth={active ? 2.2 : 1.75}
-        />
-        {!compact && (
-          <span className={cn("text-sm leading-none font-medium transition-colors", active && "font-semibold")}>
-            {item.label}
-          </span>
-        )}
-        {active && !compact && (
-          <span className="ml-auto w-1.5 h-1.5 rounded-full bg-primary" />
-        )}
+        <div className="flex items-center justify-between px-4 py-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-primary" />
+            <span className="text-sm font-semibold">More</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <nav className="flex-1 overflow-y-auto p-2" aria-label="More navigation">
+          {moreNav.map((item) => {
+            const active = isActive(location, item.href);
+            const Icon = item.icon;
+            return (
+              <Link key={item.href} href={item.href}>
+                <div
+                  onClick={onClose}
+                  className={cn(
+                    "flex items-center gap-3 rounded-xl px-3 py-2.5 cursor-pointer transition-colors",
+                    active
+                      ? "bg-primary/12 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <Icon
+                    className="w-[18px] h-[18px] shrink-0"
+                    strokeWidth={active ? 2.2 : 1.75}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className={cn("text-sm leading-none", active && "font-semibold")}>
+                      {item.label}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground/70 leading-none mt-1 truncate">
+                      {item.hint}
+                    </div>
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
+        </nav>
       </div>
-    </Link>
+    </>
   );
 }
 
-function NavGroup({ label, items, location }: { label: string; items: typeof primaryNav; location: string }) {
+function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
+  const qc = useQueryClient();
+  const [, navigate] = useLocation();
+  const { data: channelsData, isLoading } = useListChannels({
+    query: { refetchInterval: 8000, queryKey: getListChannelsQueryKey() },
+  });
+  const channels = Array.isArray(channelsData) ? channelsData : [];
+  const createChannel = useCreateChannel();
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+
+  const startEdit = (id: number, currentName: string) => {
+    setEditingId(id);
+    setEditName(currentName);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditName("");
+  };
+
+  const saveEdit = async (id: number) => {
+    const trimmed = editName.trim();
+    if (!trimmed) {
+      cancelEdit();
+      return;
+    }
+    try {
+      const res = await fetch(resolveApiUrl(`/api/channels/${id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
+    } catch (err) {
+      toast.error("Couldn't rename thread");
+    } finally {
+      cancelEdit();
+    }
+  };
+
+  const deleteChannel = async (id: number) => {
+    if (!confirm("Delete this thread and all its messages?")) return;
+    try {
+      const res = await fetch(resolveApiUrl(`/api/channels/${id}`), {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
+      // If we deleted the active one, route to /
+      navigate("/chat");
+    } catch (err) {
+      toast.error("Couldn't delete thread");
+    }
+  };
+
+  const handleNewChat = async () => {
+    try {
+      const result = await createChannel.mutateAsync({ data: { name: "New chat" } });
+      const newId = (result as { id?: number })?.id;
+      qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
+      if (newId) {
+        navigate(`/chat?c=${newId}`);
+      }
+      onItemClick?.();
+    } catch (err) {
+      toast.error("Couldn't create thread");
+    }
+  };
+
   return (
-    <div className="space-y-0.5">
-      <div className="px-3 mb-1 text-[10px] font-semibold tracking-widest uppercase text-muted-foreground/50 select-none">
-        {label}
+    <div className="flex flex-col h-full">
+      <button
+        onClick={handleNewChat}
+        disabled={createChannel.isPending}
+        className={cn(
+          "mx-2 mt-2 mb-3 flex items-center justify-center gap-2 rounded-xl px-3 py-2.5",
+          "bg-primary/12 text-primary border border-primary/20",
+          "hover:bg-primary/20 transition-colors text-sm font-medium",
+          "disabled:opacity-50",
+        )}
+        data-testid="new-chat-button"
+      >
+        <Plus className="w-4 h-4" />
+        New chat
+      </button>
+
+      <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
+        {isLoading && channels.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground/60 px-3 py-2">Loading…</div>
+        ) : channels.length === 0 ? (
+          <div className="text-[11px] text-muted-foreground/60 px-3 py-2">
+            No threads yet.
+          </div>
+        ) : (
+          channels.map((c) => {
+            const isEditing = editingId === c.id;
+            return (
+              <div
+                key={c.id}
+                className={cn(
+                  "group flex items-center gap-1 rounded-xl px-2 py-2 cursor-pointer transition-colors",
+                  "hover:bg-muted text-foreground/85",
+                )}
+                onClick={() => {
+                  if (!isEditing) {
+                    navigate(`/chat?c=${c.id}`);
+                    onItemClick?.();
+                  }
+                }}
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground/60" />
+                {isEditing ? (
+                  <input
+                    autoFocus
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onBlur={() => saveEdit(c.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEdit(c.id);
+                      if (e.key === "Escape") cancelEdit();
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex-1 bg-transparent text-sm border-b border-primary outline-none"
+                  />
+                ) : (
+                  <span className="flex-1 text-sm truncate">{c.name}</span>
+                )}
+                {!isEditing && (
+                  <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEdit(c.id, c.name);
+                      }}
+                      className="p-1 rounded hover:bg-background/60"
+                      aria-label="Rename"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteChannel(c.id);
+                      }}
+                      className="p-1 rounded hover:bg-background/60"
+                      aria-label="Delete"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
-      {items.map((item) => (
-        <NavItem key={item.href} item={item} location={location} />
-      ))}
     </div>
   );
 }
@@ -92,13 +289,14 @@ function NavGroup({ label, items, location }: { label: string; items: typeof pri
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [heartbeat, setHeartbeat] = useState<"online" | "offline" | "unknown">("unknown");
-  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const ping = async () => {
       try {
-        const res = await fetch("/api/n8n/autonomy/heartbeat");
+        const res = await fetch("/api/hermes/status");
         if (alive) setHeartbeat(res.ok ? "online" : "offline");
       } catch {
         if (alive) setHeartbeat("offline");
@@ -110,138 +308,115 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="flex flex-col md:flex-row h-screen w-full bg-background text-foreground overflow-hidden font-sans">
+    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans">
 
-      {/* ── Desktop sidebar ─────────────────────────────────────────────── */}
-      <aside className="hidden md:flex w-56 flex-shrink-0 border-r border-border bg-card/60 backdrop-blur-xl flex-col py-5 z-20 gap-5">
-
+      {/* ── Desktop sidebar — chat threads only (Manus-style) ───────────── */}
+      <aside className="hidden md:flex w-60 flex-shrink-0 border-r border-border bg-card flex-col">
         {/* Logo */}
-        <Link href="/" data-testid="link-aura-logo">
-          <div className="flex items-center gap-3 px-4 cursor-pointer group select-none">
-            <div className="relative w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center border border-primary/25 shadow-[0_0_18px_rgba(139,92,246,0.20)] transition-transform group-hover:scale-105 shrink-0">
-              <BrainCircuit className="w-5 h-5 text-primary" />
+        <Link href="/chat" data-testid="link-aura-logo">
+          <div className="flex items-center gap-3 px-4 py-4 cursor-pointer group select-none border-b border-border">
+            <div className="relative w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25 shrink-0">
+              <BrainCircuit className="w-4 h-4 text-primary" />
               <span className={cn(
-                "absolute -right-0.5 -top-0.5 w-2.5 h-2.5 rounded-full border-2 border-card",
+                "absolute -right-0.5 -top-0.5 w-2 h-2 rounded-full border-2 border-card",
                 heartbeat === "online"  ? "bg-emerald-400 animate-pulse" :
                 heartbeat === "offline" ? "bg-destructive" :
                                           "bg-muted-foreground",
               )} />
             </div>
             <div className="leading-tight">
-              <div className="text-sm font-black tracking-tight text-foreground">AURA-OMEGA</div>
-              <div className="text-[11px] text-muted-foreground font-medium">AI Agent Swarm</div>
+              <div className="text-sm font-black tracking-tight">AURA-OMEGA</div>
+              <div className="text-[10px] text-muted-foreground font-medium">Hermes runtime</div>
             </div>
           </div>
         </Link>
 
-        <div className="h-px bg-border mx-4" />
+        <ChatThreadList />
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto px-2 space-y-5" aria-label="Main navigation">
-          <NavGroup label="Main" items={primaryNav} location={location} />
-          <NavGroup label="Tools" items={toolsNav} location={location} />
-          <NavGroup label="Config" items={configNav} location={location} />
-        </nav>
-
-        {/* System status */}
-        <div className="px-3">
+        {/* Bottom: More button + status */}
+        <div className="border-t border-border p-2 space-y-1">
+          <button
+            onClick={() => setMoreOpen(true)}
+            className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            data-testid="more-button"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+            More
+          </button>
           <div className={cn(
-            "flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-xs",
+            "flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px]",
             heartbeat === "online"
               ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"
               : "border-border bg-muted/40 text-muted-foreground",
           )}>
-            <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-            <span className="font-medium">
-              {heartbeat === "online" ? "System online" : heartbeat === "offline" ? "System offline" : "Checking…"}
+            <ShieldCheck className="w-3 h-3 shrink-0" />
+            <span className="font-medium truncate">
+              {heartbeat === "online" ? "Online" : heartbeat === "offline" ? "Offline" : "Checking…"}
             </span>
           </div>
         </div>
       </aside>
 
-      {/* ── Main content ─────────────────────────────────────────────────── */}
-      <main className="flex-1 flex min-w-0 min-h-0 overflow-hidden relative z-10">{children}</main>
+      {/* ── Main content ────────────────────────────────────────────────── */}
+      <main className="flex-1 flex min-w-0 min-h-0 overflow-hidden">
+        {children}
+      </main>
 
-      {/* ── Mobile bottom nav ─────────────────────────────────────────────── */}
-      <>
-        {/* Backdrop for More drawer */}
-        {mobileMoreOpen && (
+      {/* ── More drawer (desktop + mobile) ──────────────────────────────── */}
+      <MoreDrawer open={moreOpen} onClose={() => setMoreOpen(false)} location={location} />
+
+      {/* ── Mobile: thread drawer ───────────────────────────────────────── */}
+      {mobileDrawerOpen && (
+        <div
+          className="md:hidden fixed inset-0 bg-black/40 z-40 backdrop-blur-sm"
+          onClick={() => setMobileDrawerOpen(false)}
+        />
+      )}
+      <div className={cn(
+        "md:hidden fixed top-0 left-0 bottom-0 z-50 w-72 bg-card border-r border-border",
+        "flex flex-col transition-transform duration-200",
+        mobileDrawerOpen ? "translate-x-0" : "-translate-x-full",
+      )}>
+        <Link href="/chat" data-testid="link-aura-logo-mobile">
           <div
-            className="md:hidden fixed inset-0 bg-black/40 z-30 backdrop-blur-sm"
-            onClick={() => setMobileMoreOpen(false)}
-          />
-        )}
-
-        {/* More drawer (slides up) */}
-        <div className={cn(
-          "md:hidden fixed bottom-16 left-0 right-0 z-40 bg-card border-t border-border transition-transform duration-200 pb-safe",
-          mobileMoreOpen ? "translate-y-0" : "translate-y-full",
-        )}>
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <span className="text-sm font-semibold">More</span>
-            <button
-              onClick={() => setMobileMoreOpen(false)}
-              className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="px-3 py-3 grid grid-cols-3 gap-1">
-            {[...toolsNav, ...configNav].map((item) => {
-              const active = isActive(location, item.href);
-              return (
-                <Link key={item.href} href={item.href}>
-                  <div
-                    onClick={() => setMobileMoreOpen(false)}
-                    className={cn(
-                      "flex flex-col items-center gap-1.5 rounded-xl py-3 px-2 transition-colors",
-                      active ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted",
-                    )}
-                  >
-                    <item.icon className="w-5 h-5" strokeWidth={active ? 2.2 : 1.75} />
-                    <span className="text-[11px] font-medium leading-none">{item.label}</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Bottom nav bar */}
-        <nav
-          className="md:hidden flex-shrink-0 flex items-stretch border-t border-border bg-card/95 backdrop-blur-xl z-20"
-          aria-label="Mobile navigation"
-          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-        >
-          {primaryNav.map((item) => {
-            const active = isActive(location, item.href);
-            return (
-              <Link key={item.href} href={item.href} data-testid={`tab-${item.label.toLowerCase()}`} className="flex-1">
-                <div className={cn(
-                  "flex flex-col items-center justify-center gap-1 h-14 transition-colors",
-                  active ? "text-primary" : "text-muted-foreground",
-                )}>
-                  {active && <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-primary" />}
-                  <item.icon className="w-5 h-5" strokeWidth={active ? 2.2 : 1.75} />
-                  <span className="text-[10px] font-semibold leading-none">{item.label}</span>
-                </div>
-              </Link>
-            );
-          })}
-          {/* More button */}
-          <button
-            onClick={() => setMobileMoreOpen((v) => !v)}
-            className={cn(
-              "flex-1 flex flex-col items-center justify-center gap-1 h-14 transition-colors",
-              mobileMoreOpen ? "text-primary" : "text-muted-foreground",
-            )}
-            aria-label="More navigation items"
+            onClick={() => setMobileDrawerOpen(false)}
+            className="flex items-center gap-3 px-4 py-4 cursor-pointer border-b border-border"
           >
-            <MoreHorizontal className="w-5 h-5" strokeWidth={1.75} />
-            <span className="text-[10px] font-semibold leading-none">More</span>
-          </button>
-        </nav>
-      </>
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25">
+              <BrainCircuit className="w-4 h-4 text-primary" />
+            </div>
+            <div className="leading-tight">
+              <div className="text-sm font-black tracking-tight">AURA-OMEGA</div>
+              <div className="text-[10px] text-muted-foreground font-medium">Hermes runtime</div>
+            </div>
+          </div>
+        </Link>
+        <ChatThreadList onItemClick={() => setMobileDrawerOpen(false)} />
+      </div>
+
+      {/* ── Mobile bottom nav ───────────────────────────────────────────── */}
+      <nav
+        className="md:hidden flex-shrink-0 flex items-stretch border-t border-border bg-card z-20"
+        aria-label="Mobile navigation"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
+        <button
+          onClick={() => setMobileDrawerOpen(true)}
+          className="flex-1 flex flex-col items-center justify-center gap-1 h-14 text-muted-foreground"
+          aria-label="Open threads"
+        >
+          <MessageSquare className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Threads</span>
+        </button>
+        <button
+          onClick={() => setMoreOpen(true)}
+          className="flex-1 flex flex-col items-center justify-center gap-1 h-14 text-muted-foreground"
+          aria-label="More"
+        >
+          <MoreHorizontal className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">More</span>
+        </button>
+      </nav>
     </div>
   );
 }
