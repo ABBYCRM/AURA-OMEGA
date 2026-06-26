@@ -218,6 +218,17 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .slice(0, 160);
 }
 
+// Loop-guard thresholds. These are soft limits: a smart agent that legitimately
+// needs to retry the same call with the same args (e.g. after fixing an auth
+// header) can do so up to N times. Beyond N, the orchestrator forces the agent
+// to STOP and report — it is stuck and the operator should investigate.
+//
+//   MAX_CONSECUTIVE_SAME_CALL = how many identical tool calls in a row we
+//     tolerate before we cut the run. 3 matches the dedup message ("you
+//     already called this — use it or pick a different tool") that the agent
+//     is ignoring.
+const MAX_CONSECUTIVE_SAME_CALL = 3;
+
 const URL_RE = /https?:\/\/[^\s"')<>]+/i;
 function extractUrl(text: string): string | null {
   return text.match(URL_RE)?.[0] ?? null;
@@ -373,6 +384,7 @@ export async function executeAgentCommand(opts: {
     // (tool + exact args) call reuses its result instead of re-billing the
     // external API and re-spending tokens — a frequent, costly agent loop.
     const callCache = new Map<string, string>();
+    const callHistory: string[] = []; // ordered log of call keys for loop detection
     while (steps < MAX_AGENT_STEPS) {
       steps++;
       const assistant = await completeChatTurn(model, messages, tools);
@@ -443,14 +455,32 @@ export async function executeAgentCommand(opts: {
           // Identical call already executed this run — reuse it, don't pay again.
           toolResult = `(deduplicated: you already called ${name} with these exact arguments earlier in this run. Reusing that result — do not repeat it. Use it, or call a different tool / different arguments.)\n\n${callCache.get(callKey)}`;
         } else {
-          try {
-            toolResult = await runTool(name, parsedArgs, ctx);
-            if (toolResult.startsWith("error:")) ok = false;
-          } catch (e) {
-            ok = false;
-            toolResult = `error: ${String(e).slice(0, 300)}`;
+          // Loop guard: count how many of THIS agent's recent consecutive calls
+          // are identical. After MAX_CONSECUTIVE_SAME_CALL hits we cut the run
+          // and tell the agent it is stuck — the operator needs to inspect the
+          // failure, not let the agent keep racking up identical requests that
+          // return the same error every time. This protects both cost and the
+          // upstream service we're hammering (e.g. Tavily, Composio, GitHub).
+          let recentSame = 0;
+          for (let i = callHistory.length - 1; i >= 0; i--) {
+            if (callHistory[i] === callKey) recentSame++;
+            else break;
           }
-          if (ok) callCache.set(callKey, toolResult);
+          if (recentSame >= MAX_CONSECUTIVE_SAME_CALL) {
+            ok = false;
+            toolResult = `error: loop guard — you have called ${name} with these EXACT arguments ${recentSame + 1} times in a row and each call returned the same result. You are stuck. STOP calling this tool. Switch tools, change your arguments, or report a final answer to the operator describing what you tried and what blocked you. The orchestrator is closing this directive.`;
+            callHistory.push(callKey); // record so subsequent identical calls stay blocked
+          } else {
+            try {
+              toolResult = await runTool(name, parsedArgs, ctx);
+              if (toolResult.startsWith("error:")) ok = false;
+            } catch (e) {
+              ok = false;
+              toolResult = `error: ${String(e).slice(0, 300)}`;
+            }
+            callHistory.push(callKey);
+            if (ok) callCache.set(callKey, toolResult);
+          }
         }
 
         await db
