@@ -231,6 +231,66 @@ const AGENT_CAPABILITIES: Record<number, string[]> = {
   6: ["web_scrape", "http_request", "memory_search", "memory_write"],
 };
 
+// Hermes runtime schema — sessions, skills, skill runs, nudges. Idempotent.
+const HERMES_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "hermes_sessions" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "goal" text NOT NULL,
+  "channel_id" integer,
+  "outcome" text DEFAULT 'unknown' NOT NULL,
+  "aura_reports" jsonb DEFAULT '[]' NOT NULL,
+  "tool_calls" jsonb DEFAULT '[]' NOT NULL,
+  "duration_ms" integer,
+  "final_answer" text,
+  "started_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp
+);
+CREATE INDEX IF NOT EXISTS "hermes_sessions_outcome_idx" ON "hermes_sessions" ("outcome");
+CREATE INDEX IF NOT EXISTS "hermes_sessions_started_idx" ON "hermes_sessions" ("started_at");
+
+CREATE TABLE IF NOT EXISTS "hermes_skills" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "name" text NOT NULL UNIQUE,
+  "description" text NOT NULL,
+  "trigger_keywords" text[] DEFAULT '{}' NOT NULL,
+  "pattern" jsonb DEFAULT '[]' NOT NULL,
+  "preferred_aura" integer,
+  "success_count" integer DEFAULT 0 NOT NULL,
+  "failure_count" integer DEFAULT 0 NOT NULL,
+  "success_score" real DEFAULT 0.5 NOT NULL,
+  "status" text DEFAULT 'candidate' NOT NULL,
+  "source_session_id" integer,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "updated_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "hermes_skills_status_idx" ON "hermes_skills" ("status");
+CREATE INDEX IF NOT EXISTS "hermes_skills_score_idx" ON "hermes_skills" ("success_score");
+
+CREATE TABLE IF NOT EXISTS "hermes_skill_runs" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "skill_id" integer NOT NULL,
+  "session_id" integer,
+  "success" integer DEFAULT 0 NOT NULL,
+  "duration_ms" integer,
+  "error" text,
+  "ran_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "hermes_skill_runs_skill_idx" ON "hermes_skill_runs" ("skill_id");
+CREATE INDEX IF NOT EXISTS "hermes_skill_runs_ran_at_idx" ON "hermes_skill_runs" ("ran_at");
+
+CREATE TABLE IF NOT EXISTS "hermes_nudges" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "kind" text NOT NULL,
+  "payload" jsonb DEFAULT '{}' NOT NULL,
+  "status" text DEFAULT 'pending' NOT NULL,
+  "attempts" integer DEFAULT 0 NOT NULL,
+  "last_error" text,
+  "created_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp
+);
+CREATE INDEX IF NOT EXISTS "hermes_nudges_status_idx" ON "hermes_nudges" ("status");
+`;
+
 export async function runMigrations(): Promise<void> {
   // The connection acquire is INSIDE the try: if the database is unreachable
   // (deleted free-tier DB, cold start, transient network), pool.connect() must
@@ -242,7 +302,8 @@ export async function runMigrations(): Promise<void> {
     client = await pool.connect();
     logger.info("Running startup migrations...");
     await client.query(SCHEMA_SQL);
-    logger.info("Schema ready");
+    await client.query(HERMES_SCHEMA_SQL);
+    logger.info("Schema ready (core + hermes)");
 
     // Always run — ON CONFLICT clauses make both statements idempotent.
     await client.query(SEED_AGENTS);

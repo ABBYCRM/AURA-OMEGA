@@ -47,8 +47,9 @@ import {
   sanitizeForStorage,
   type ToolContext,
 } from "./tools";
-import { sendInngestEvent, traceLlmRun, llmBaseUrl } from "./lib/integrations";
+import { sendInngestEvent, traceLlmRun, llmBaseUrl, completeChat } from "./lib/integrations";
 import { groundingProof } from "./lib/grounding";
+import { recordOutcome } from "./lib/hermes";
 
 type Agent = typeof agentsTable.$inferSelect;
 
@@ -141,40 +142,10 @@ export async function reconcileStaleWork(): Promise<void> {
  * defaults to a small budget (planning/review emit short JSON), but callers that
  * produce the operator-facing deliverable (final synthesis) pass a larger budget
  * so a 10/10 answer isn't truncated.
+ *
+ * Implementation lives in lib/integrations.ts so other modules (notably Hermes)
+ * can call the same LLM path with the same routing + tracing.
  */
-async function completeChat(model: string, system: string, user: string, maxTokens = 800): Promise<string> {
-  const startedAt = new Date();
-  let r: Response;
-  try {
-    r = await fetch(`${llmBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: openrouterHeaders(),
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        stream: false,
-        max_tokens: maxTokens,
-      }),
-    });
-  } catch (err) {
-    traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: String(err) });
-    throw err;
-  }
-  if (!r.ok) {
-    const errText = (await r.text()).slice(0, 200);
-    traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: `LLM ${r.status}: ${errText}` });
-    throw new Error(`LLM ${r.status}: ${errText}`);
-  }
-  const data = (await r.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const out = data?.choices?.[0]?.message?.content?.trim() || "(no response)";
-  traceLlmRun({ name: "completeChat", model, input: { system, user }, output: out, startedAt });
-  return out;
-}
 
 // ─── Native tool-calling primitives ─────────────────────────────────────────
 
@@ -677,6 +648,7 @@ export async function orchestrateGoal(opts: {
   forceAgentId?: number;
 }): Promise<void> {
   const { goal, channelId, priority, sourceContext, forceAgentId } = opts;
+  const startedAt = new Date();
   logger.info({ phase: "abby-planning", ...groundingProof(sourceContext) }, "orchestration grounding");
   void sendInngestEvent("swarm/goal.received", { goal, channelId, priority });
   try {
@@ -858,9 +830,38 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       auraReports: results.length,
       results: results.map((r) => ({ name: r.name, result: r.result.slice(0, 500) })),
     });
+
+    // Hermes runtime hook — record this session for closed-loop learning.
+    // Best-effort; never throws, never blocks the operator reply.
+    void recordOutcome({
+      goal,
+      channelId,
+      outcome: results.length > 0 ? "success" : "partial",
+      auraReports: results.map((r) => ({
+        agentId: 0,
+        name: r.name,
+        result: r.result,
+        toolCalls: [],
+      })),
+      toolCalls: [],
+      finalAnswer,
+      durationMs: undefined,
+      startedAt: startedAt,
+      completedAt: new Date(),
+    });
   } catch (err) {
     logger.error({ err }, "orchestrateGoal failed");
     void sendInngestEvent("swarm/goal.failed", { goal, channelId, error: String(err).slice(0, 300) });
+    void recordOutcome({
+      goal,
+      channelId,
+      outcome: "failed",
+      auraReports: [],
+      toolCalls: [],
+      durationMs: undefined,
+      startedAt,
+      completedAt: new Date(),
+    });
     await db
       .update(agentsTable)
       .set({ status: "idle" })

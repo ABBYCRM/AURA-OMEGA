@@ -7,6 +7,7 @@ import { reconcileStaleWork } from "./orchestrator";
 import { integrationStatus, nvidiaConfigured } from "./lib/integrations";
 import { startScheduler } from "./lib/scheduler";
 import { startInternalAutonomyLoop } from "./lib/n8n/internalAutonomy";
+import { scheduleHeartbeat } from "./lib/hermes";
 
 const rawPort = process.env["PORT"];
 
@@ -57,6 +58,7 @@ runMigrations()
       startKeepAlive();
       startScheduler();
       startInternalAutonomyLoop();
+      scheduleHeartbeat();
     });
 
     server.on("error", (err) => {

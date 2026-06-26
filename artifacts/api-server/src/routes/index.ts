@@ -20,6 +20,7 @@ import discordRouter from "./discord";
 import n8nRouter from "./n8n";
 import mvpGovernorRouter from "./mvpGovernor";
 import settingsRouter from "./settings";
+import hermesRouter from "./hermes";
 import { requireOperator } from "../lib/auth";
 
 const router: IRouter = Router();
@@ -45,5 +46,6 @@ router.use(selfCheckRouter);
 router.use(authRouter);
 router.use(requireOperator, vaultRouter);
 router.use(requireOperator, socialRouter);
+router.use("/hermes", hermesRouter);
 
 export default router;
