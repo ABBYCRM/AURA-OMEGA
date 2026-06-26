@@ -762,6 +762,7 @@ export function integrationStatus(): IntegrationStatus[] {
     { key: "embeddings", name: "Embeddings (semantic memory)", category: "memory", envVar: "EMBEDDINGS_API_KEY", configured: has("EMBEDDINGS_API_KEY") },
     { key: "pinecone", name: "Pinecone (vector memory)", category: "memory", envVar: "PINECONE_API_KEY", configured: has("PINECONE_API_KEY") && (has("PINECONE_INDEX_HOST") || has("PINECONE_INDEX_URL") || has("PINECONE_INDEX")) },
     { key: "tavily", name: "Tavily", category: "search", envVar: "TAVILY_API_KEY", configured: has("TAVILY_API_KEY") },
+    { key: "discord", name: `Discord bridge${has("DISCORD_CHANNEL_ID") ? "" : " (needs channel id)"}`, category: "messaging", envVar: "DISCORD_BOT_TOKEN", configured: has("DISCORD_BOT_TOKEN") && has("DISCORD_CHANNEL_ID") && has("DISCORD_AURA_BOT_USER_IDS") },
     { key: "exa", name: "Exa", category: "search", envVar: "EXA_API_KEY", configured: has("EXA_API_KEY") },
     { key: "firecrawl", name: "Firecrawl", category: "search", envVar: "FIRECRAWL_API_KEY", configured: has("FIRECRAWL_API_KEY") },
     { key: "steel", name: "Steel", category: "browser", envVar: "STEEL_API_KEY", configured: has("STEEL_API_KEY") },
