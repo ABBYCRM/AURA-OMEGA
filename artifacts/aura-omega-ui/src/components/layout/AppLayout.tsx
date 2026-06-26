@@ -67,23 +67,23 @@ function MoreDrawer({
       />
       <div
         className={cn(
-          "fixed top-0 left-0 bottom-0 z-50 w-72 bg-card border-r border-border",
-          "flex flex-col",
+          "fixed top-0 left-0 bottom-0 z-50 bg-card border-r border-border",
+          "flex flex-col w-[88%] max-w-[360px] sm:w-72",
         )}
         role="dialog"
         aria-label="More navigation"
       >
-        <div className="flex items-center justify-between px-4 py-4 border-b border-border">
+        <div className="flex items-center justify-between px-4 py-4 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-primary" />
             <span className="text-sm font-semibold">More</span>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+            className="min-h-[44px] min-w-[44px] -mr-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
             aria-label="Close"
           >
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
         <nav className="flex-1 overflow-y-auto p-2" aria-label="More navigation">
@@ -95,7 +95,7 @@ function MoreDrawer({
                 <div
                   onClick={onClose}
                   className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 py-2.5 cursor-pointer transition-colors",
+                    "flex items-center gap-3 rounded-xl px-3 min-h-[44px] cursor-pointer transition-colors",
                     active
                       ? "bg-primary/12 text-primary"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -201,9 +201,9 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
         onClick={handleNewChat}
         disabled={createChannel.isPending}
         className={cn(
-          "mx-2 mt-2 mb-3 flex items-center justify-center gap-2 rounded-xl px-3 py-2.5",
+          "mx-2 mt-2 mb-3 flex items-center justify-center gap-2 rounded-xl px-3 min-h-[44px]",
           "bg-primary/12 text-primary border border-primary/20",
-          "hover:bg-primary/20 transition-colors text-sm font-medium",
+          "hover:bg-primary/20 active:bg-primary/25 transition-colors text-sm font-medium",
           "disabled:opacity-50",
         )}
         data-testid="new-chat-button"
@@ -226,8 +226,8 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
               <div
                 key={c.id}
                 className={cn(
-                  "group flex items-center gap-1 rounded-xl px-2 py-2 cursor-pointer transition-colors",
-                  "hover:bg-muted text-foreground/85",
+                  "group flex items-center gap-1 rounded-xl px-2 min-h-[44px] cursor-pointer transition-colors",
+                  "hover:bg-muted active:bg-muted/70 text-foreground/85",
                 )}
                 onClick={() => {
                   if (!isEditing) {
@@ -254,26 +254,26 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
                   <span className="flex-1 text-sm truncate">{c.name}</span>
                 )}
                 {!isEditing && (
-                  <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 transition-opacity">
+                  <div className="opacity-0 group-hover:opacity-100 sm:group-focus-within:opacity-100 flex items-center gap-0.5 transition-opacity">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         startEdit(c.id, c.name);
                       }}
-                      className="p-1 rounded hover:bg-background/60"
+                      className="min-h-[32px] min-w-[32px] p-1.5 rounded hover:bg-background/60 active:bg-background/80 flex items-center justify-center"
                       aria-label="Rename"
                     >
-                      <Pencil className="w-3 h-3" />
+                      <Pencil className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         deleteChannel(c.id);
                       }}
-                      className="p-1 rounded hover:bg-background/60"
+                      className="min-h-[32px] min-w-[32px] p-1.5 rounded hover:bg-background/60 active:bg-background/80 flex items-center justify-center"
                       aria-label="Delete"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 )}
@@ -337,7 +337,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="border-t border-border p-2 space-y-1">
           <button
             onClick={() => setMoreOpen(true)}
-            className="w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
             data-testid="more-button"
           >
             <MoreHorizontal className="w-4 h-4" />
@@ -373,16 +373,16 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         />
       )}
       <div className={cn(
-        "md:hidden fixed top-0 left-0 bottom-0 z-50 w-72 bg-card border-r border-border",
-        "flex flex-col transition-transform duration-200",
+        "md:hidden fixed top-0 left-0 bottom-0 z-50 bg-card border-r border-border",
+        "flex flex-col transition-transform duration-200 w-[88%] max-w-[360px]",
         mobileDrawerOpen ? "translate-x-0" : "-translate-x-full",
       )}>
         <Link href="/chat" data-testid="link-aura-logo-mobile">
           <div
             onClick={() => setMobileDrawerOpen(false)}
-            className="flex items-center gap-3 px-4 py-4 cursor-pointer border-b border-border"
+            className="flex items-center gap-3 px-4 py-4 cursor-pointer border-b border-border min-h-[60px]"
           >
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25 shrink-0">
               <BrainCircuit className="w-4 h-4 text-primary" />
             </div>
             <div className="leading-tight">
@@ -402,19 +402,36 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       >
         <button
           onClick={() => setMobileDrawerOpen(true)}
-          className="flex-1 flex flex-col items-center justify-center gap-1 h-14 text-muted-foreground"
+          className={cn(
+            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
+            mobileDrawerOpen ? "text-primary" : "text-muted-foreground",
+          )}
           aria-label="Open threads"
         >
           <MessageSquare className="w-5 h-5" />
-          <span className="text-[10px] font-semibold">Threads</span>
+          <span className="text-[10px] font-semibold leading-none">Threads</span>
+        </button>
+        <button
+          onClick={() => navigate("/hermes")}
+          className={cn(
+            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
+            isActive(location, "/hermes") ? "text-primary" : "text-muted-foreground",
+          )}
+          aria-label="Hermes"
+        >
+          <Boxes className="w-5 h-5" />
+          <span className="text-[10px] font-semibold leading-none">Hermes</span>
         </button>
         <button
           onClick={() => setMoreOpen(true)}
-          className="flex-1 flex flex-col items-center justify-center gap-1 h-14 text-muted-foreground"
+          className={cn(
+            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
+            moreOpen ? "text-primary" : "text-muted-foreground",
+          )}
           aria-label="More"
         >
           <MoreHorizontal className="w-5 h-5" />
-          <span className="text-[10px] font-semibold">More</span>
+          <span className="text-[10px] font-semibold leading-none">More</span>
         </button>
       </nav>
     </div>
