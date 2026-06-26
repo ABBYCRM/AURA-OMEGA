@@ -49,7 +49,17 @@ export const openhandsEngine: EngineAdapter = {
     }
 
     try {
-      const out = await _runTool(action, step.args, toolCtx(step.args.missionId as number ?? 0));
+      // The planner uses canonical arg names (code/source/url/query); the runTool
+      // registry uses its own. Translate so the registry actually receives what it
+      // expects. Every mapping below is engine action → tool + arg renames.
+      const tool = action;
+      const toolArgs: Record<string, unknown> = { ...step.args };
+      if (action === "code_exec" || action === "cloud_code_exec") {
+        if (toolArgs["code"] != null && toolArgs["source"] == null) toolArgs["source"] = toolArgs["code"];
+      } else if (action === "web_scrape" || action === "web_search" || action === "web_screenshot" || action === "http_request") {
+        // already in canonical shape
+      }
+      const out = await _runTool(tool, toolArgs, toolCtx(step.args.missionId as number ?? 0));
       return { ok: !out.startsWith("error:"), output: out, evidence: out.slice(0, 200), durationMs: Date.now() - started };
     } catch (err) {
       logger.warn({ err, action }, "openhands engine: tool failed");
