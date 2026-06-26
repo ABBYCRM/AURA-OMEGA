@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
 import {
   useListChannels,
   useCreateChannel,
@@ -17,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   Plus, Send, Paperclip, X, Menu, Download, Trash2, Pencil, Check,
-  MessageSquare, Bot, AlertTriangle, Loader2, Sparkles, Copy, Volume2, Square, Mic,
+  MessageSquare, Bot, AlertTriangle, Loader2, Sparkles, Copy, Volume2, Square, Mic, Rocket,
 } from "lucide-react";
 
 // Uploaded to /api/uploads on pick; images are rendered inline and sent to ABBY
@@ -196,6 +197,47 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, ai.tokens, ai.streaming]);
+
+  const [, setLocation] = useLocation();
+
+  // Launch the current composer text as a Mission Kernel goal. Posts to
+  // /api/missions, surfaces a deep-link to /missions, and clears the composer
+  // so the operator can keep iterating. This is the surface that was missing
+  // before — pasting a goal into the chat used to vanish into a chat reply
+  // instead of becoming a tracked, durable mission.
+  const launchAsMission = async () => {
+    const goal = text.trim();
+    if (!goal) return;
+    try {
+      const r = await fetch(resolveApiUrl("/api/missions"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal, createdBy: "chat" }),
+      });
+      if (!r.ok) {
+        const err = await r.text();
+        toast.error(`Mission creation failed: ${err.slice(0, 120)}`);
+        return;
+      }
+      const d = await r.json();
+      const missionId = d?.mission?.id;
+      const gate = d?.brainGate ?? "?";
+      const steps = Array.isArray(d?.plan) ? d.plan.length : 0;
+      toast.success(
+        `Mission #${missionId} created (${steps} steps, gate=${gate})`,
+        {
+          description: "Tap to open the mission dashboard",
+          action: {
+            label: "Open",
+            onClick: () => setLocation(`/missions`),
+          },
+        },
+      );
+      setText("");
+    } catch (e) {
+      toast.error(`Mission creation failed: ${String(e).slice(0, 120)}`);
+    }
+  };
 
   const send = () => {
     const body = text.trim();
@@ -608,6 +650,15 @@ export default function ChatPage() {
                 placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : "Message AURA-OMEGA…"}
                 className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-[200px]"
               />
+              <button
+                onClick={launchAsMission}
+                disabled={!text.trim() || activeId == null || ai.streaming || uploading}
+                aria-label="Launch as mission"
+                title="Send this goal to the Mission Kernel (event-driven execution loop). Tracks progress, retries, and final state on /missions."
+                className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+              >
+                <Rocket className="w-5 h-5" />
+              </button>
               <button
                 onClick={send}
                 disabled={(!text.trim() && !attachment) || activeId == null || ai.streaming || uploading}
