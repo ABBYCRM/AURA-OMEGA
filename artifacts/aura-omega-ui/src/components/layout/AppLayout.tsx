@@ -310,7 +310,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans">
+    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans flex-col md:flex-row">
 
       {/* ── Desktop sidebar — chat threads only (Manus-style) ───────────── */}
       <aside className="hidden md:flex w-60 flex-shrink-0 border-r border-border bg-card flex-col">
@@ -398,7 +398,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
       {/* ── Mobile bottom nav ───────────────────────────────────────────── */}
       <nav
-        className="md:hidden flex-shrink-0 flex items-stretch border-t border-border bg-card z-20"
+        className="md:hidden w-full flex-shrink-0 flex items-stretch border-t border-border bg-card z-20"
         aria-label="Mobile navigation"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
