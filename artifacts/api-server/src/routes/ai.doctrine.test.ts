@@ -280,9 +280,14 @@ describe("SWARM_SAFETY_RULES — hardened operating guardrails", () => {
     expect(SWARM_SAFETY_RULES.toLowerCase()).toContain("never push to main");
   });
 
-  it("forbids introducing a foreign stack into the TS monorepo", () => {
-    expect(SWARM_SAFETY_RULES).toContain("STAY IN THE STACK");
-    expect(SWARM_SAFETY_RULES.toLowerCase()).toContain("flask");
+  it("documents the stay-in-the-stack rule was removed by operator directive (2026-06-25)", () => {
+    // The 'never introduce a foreign stack' rule was removed on
+    // branch 2026-06-25-remove-foreign-stack-rule at the operator's explicit
+    // request. This test asserts the removal marker is present so the change
+    // is detectable, not the rule itself.
+    expect(SWARM_SAFETY_RULES).toContain("STAY-IN-THE-STACK RULE REMOVED");
+    expect(SWARM_SAFETY_RULES).toContain("2026-06-25");
+    expect(SWARM_SAFETY_RULES).toContain("operator directive");
   });
 
   it("requires stop-and-ask over blind retry / guessing", () => {
