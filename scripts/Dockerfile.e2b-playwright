@@ -1,0 +1,20 @@
+FROM e2bdev/code-interpreter:latest
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        libnspr4 libnss3 \
+        libatk1.0-0 libatk-bridge2.0-0 \
+        libcups2 libdrm2 libxkbcommon0 \
+        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+        libxshmfence1 fonts-liberation \
+        && rm -rf /var/lib/apt/lists/*
+
+USER user
+
+RUN pip install --quiet playwright pandas beautifulsoup4 requests && \
+    python -m playwright install chromium
