@@ -49,12 +49,17 @@ export class ScrcpyAdapter extends StubAdapter implements RemoteControlAdapter {
   }
 
   override async status(_ctx: ToolContext, host: string): Promise<DeviceStatus> {
-    // No remote health check for scrcpy — the binary runs on the target PC
-    // and talks to a USB-attached device. The pc-agent reports the status.
+    // scrcpy has no remote status API — the binary runs locally on the
+    // target PC and talks to a USB-attached Android device. Status only
+    // arrives via pc-agent heartbeats. Until that pings us, we report
+    // 'unknown' with a note so the UI can render "Waiting for heartbeat".
     return {
       online: false,
       adapter: "scrcpy",
-      details: { host, note: "scrcpy status lands when pc-agent runs on the target PC (Round D substep 2)" },
+      details: {
+        host,
+        note: "scrcpy has no remote status API; pc-agent heartbeat will set online=true",
+      },
       checkedAt: new Date().toISOString(),
     };
   }

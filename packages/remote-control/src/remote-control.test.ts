@@ -157,6 +157,20 @@ describe("meshcentral adapter", () => {
     expect(r.ok).toBe(true);
     expect(r.url).toContain("mesh.ashx");
   });
+
+  it("sendCommand accepts valid meshcentral action", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "mesh.example.com", "wake");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("action=wake");
+  });
+
+  it("sendCommand rejects unknown meshcentral action", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.sendCommand(ctx, "mesh.example.com", "format-c:");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("format-c:");
+  });
 });
 
 describe("guacamole adapter", () => {
