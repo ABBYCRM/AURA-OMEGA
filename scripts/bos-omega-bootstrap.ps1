@@ -194,9 +194,8 @@ if (-not $SkipSunshine) {
 }
 
 Banner 10 "Install BOS PC Agent"
-# pc-agent will land as a real binary in Round D substep 2. For now we
-# register the package so the runtime can call into it.
-Info "PC Agent install stub: lands with pc-agent binary build in Round D substep 2."
+& powershell -ExecutionPolicy Bypass -File (Join-Path $scriptsDir "install-pc-agent.ps1") -AuraApiBase $AuraApiBase -DeviceName $DeviceName
+if ($LASTEXITCODE -ne 0) { Warn "PC agent install exited $LASTEXITCODE (continuing)" } else { Ok "PC agent installed and started" }
 
 # ─── 11. Install Services ────────────────────────────────────────────────
 Banner 11 "Install Services"

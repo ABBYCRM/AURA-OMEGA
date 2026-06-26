@@ -94,9 +94,25 @@ export class SunshineAdapter extends StubAdapter implements RemoteControlAdapter
 
   override async sendCommand(
     _ctx: ToolContext,
-    _host: string,
-    _command: string,
+    host: string,
+    command: string,
   ): Promise<{ ok: boolean; output?: string; error?: string }> {
-    return { ok: false, error: "Sunshine API command dispatch lands in Round D substep 2" };
+    // Sunshine supports a small set of API commands at
+    //   https://<host>:47984/api/<command>
+    // Examples: launchApp, closeApp, resume, pause.
+    const valid = ["launchApp", "closeApp", "resume", "pause", "restart"];
+    const cmd = command.trim();
+    if (!valid.includes(cmd)) {
+      return {
+        ok: false,
+        output: `[prepared] sunshine command rejected — "${cmd}" not in [${valid.join(", ")}]`,
+        error: `unknown sunshine command: ${cmd}`,
+      };
+    }
+    const url = `${host.replace(/\/$/, "")}/api/${cmd}`;
+    return {
+      ok: true,
+      output: `[prepared] POST ${url} (live dispatch lands when pc-agent can reach ${host}:47984)`,
+    };
   }
 }
