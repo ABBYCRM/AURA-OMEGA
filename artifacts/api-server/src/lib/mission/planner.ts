@@ -56,8 +56,14 @@ export function buildMissionSteps(goal: string): { steps: MissionStep[]; brain: 
           description: `Public-web search for "${goal}" — operator's fallback rule.`,
           engine: "tavily-search" as any,
           action: "search",
-          args: { query: goal, site: extractSite(goal), limit: 30, category: extractCategory(goal) },
-          acceptance: "Tavily returned at least one matching profile with name, role, company, LinkedIn URL.",
+          args: {
+            query: goal,
+            query_variants: buildQueryVariants(goal),
+            site: extractSite(goal),
+            limit: 30,
+            category: extractCategory(goal),
+          },
+          acceptance: "Tavily fanout returned >=20 unique profile(s) across variants with name, role, company, LinkedIn URL.",
           maxAttempts: 2,
           backoffSeconds: 15,
         },
@@ -94,6 +100,54 @@ function extractSite(goal: string): string {
 /** Extract a category slug from the goal text (best-effort). */
 function extractCategory(goal: string): string {
   return slugify(goal.replace(/\b(scrape|find|get|extract|contacts|profiles|from)\b/gi, "").trim());
+}
+
+/**
+ * Build multiple search query variants for fanout. A single operator goal
+ * like "scrape linkedin for 30 contacts in mass tort lead generation India
+ * and Philippines" doesn't return 30 results from one Tavily query. This
+ * function decomposes the goal into N orthogonal variants so a single
+ * tavily-search step can fill the quota.
+ *
+ * Operator rule (2026-06-26): self-reflect on what the engine actually
+ * needs vs. what was asked, and produce enough orthogonal queries to hit
+ * the count.
+ */
+function buildQueryVariants(goal: string): string[] {
+  // Strip site: prefix and trailing connectors
+  const cleaned = goal
+    .replace(/\bscrape\b/gi, "")
+    .replace(/\bfind\b/gi, "")
+    .replace(/\bget\b/gi, "")
+    .replace(/\bextract\b/gi, "")
+    .replace(/\bcontacts?\b/gi, "")
+    .replace(/\bprofiles?\b/gi, "")
+    .replace(/\bfor\b/gi, "")
+    .replace(/\bthe\b/gi, "")
+    .replace(/\ba\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Extract the core "vertical" phrase (mass tort, mva, hvac, ssdi)
+  const vertical = cleaned.match(/\b(mass\s?tort|mva|hvac|ssdi)\b/i)?.[0]?.toLowerCase();
+  // Extract role modifiers (lead gen, lead generation, case buyer, supplier, etc.)
+  const role = cleaned.match(/\b(lead\s?gen(?:eration)?|case\s+(?:acquisition\s+)?buyers?|supplier|distributor|wholesale|supply\s+(?:buyer|house)|buyer|intake)\b/i)?.[0]?.toLowerCase();
+  const variants: string[] = [];
+  if (vertical && role) {
+    variants.push(`${vertical} ${role}`);
+    variants.push(`"${vertical}" ${role}`);
+    variants.push(`${vertical} ${role} operator`);
+    variants.push(`${vertical} ${role} specialist`);
+    if (/india|philippines/i.test(goal)) {
+      variants.push(`${vertical} ${role} India`);
+      variants.push(`${vertical} ${role} Philippines`);
+    }
+    variants.push(`${vertical} ${role} case study`);
+  } else {
+    variants.push(cleaned);
+    variants.push(`"${cleaned}"`);
+  }
+  // Dedupe + cap to 6 variants (each Tavily call costs ~$0.001)
+  return Array.from(new Set(variants)).slice(0, 6);
 }
 
 function enrichOne(

@@ -69,54 +69,77 @@ export const tavilySearchEngine: EngineAdapter = {
     const limit = Math.min(Number(step.args["limit"] ?? 30), 50);
     const includeDomains = String(step.args["include_domains"] ?? site).split(",").map((s) => s.trim()).filter(Boolean);
 
-    const tavilyQuery = includeDomains.length > 0 ? `site:${includeDomains[0]} ${query}` : query;
+    // Fanout: if query_variants[] is provided, run Tavily once per variant and
+    // dedupe by URL. This is how a single mission step hits the multi-query
+    // fanout needed to fill a 30-contact quota for sparse niches.
+    const variants = Array.isArray(step.args["query_variants"])
+      ? (step.args["query_variants"] as unknown[]).map((v) => String(v)).filter((v) => v.trim().length > 0)
+      : [query];
 
-    try {
-      const r = await fetch(TAVILY_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: apiKey,
-          query: tavilyQuery,
-          max_results: limit,
-          include_domains: includeDomains,
-          search_depth: "advanced",
-        }),
-        // Tavily typically responds in <10s; cap at 30s for safety.
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!r.ok) {
-        return {
-          ok: false,
-          error: `Tavily ${r.status}: ${(await r.text()).slice(0, 200)}`,
-          durationMs: Date.now() - started,
-        };
+    // Fanout: run Tavily once per variant and dedupe by URL across variants.
+    // This is how a single mission step hits the multi-query fanout needed to
+    // fill a 30-contact quota for sparse niches. Limit is per-variant.
+    const seen = new Set<string>();
+    const allRows: string[] = [];
+    const seenVariants: string[] = [];
+    let totalOk = 0;
+    let firstError: string | null = null;
+
+    for (const variant of variants) {
+      const tavilyQuery = includeDomains.length > 0 ? `site:${includeDomains[0]} ${variant}` : variant;
+      try {
+        const r = await fetch(TAVILY_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: apiKey,
+            query: tavilyQuery,
+            max_results: limit,
+            include_domains: includeDomains,
+            search_depth: "advanced",
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!r.ok) {
+          firstError = firstError ?? `Tavily ${r.status}: ${(await r.text()).slice(0, 200)}`;
+          continue;
+        }
+        const data = (await r.json()) as TavilyResponse;
+        const results = (data.results ?? []).filter((res) => isProfileUrl(res.url));
+        seenVariants.push(`${variant}:${results.length}`);
+        for (const res of results) {
+          const cleanUrl = res.url.split("?")[0];
+          if (seen.has(cleanUrl)) continue;
+          seen.add(cleanUrl);
+          const parsed = parseTitle(res.title);
+          allRows.push([
+            step.args["category"] ?? slugify(query),
+            parsed.name,
+            parsed.role,
+            parsed.company,
+            "",
+            cleanUrl,
+          ].join(","));
+          totalOk++;
+        }
+      } catch (err) {
+        firstError = firstError ?? String(err).slice(0, 200);
+        logger.warn({ err, query: tavilyQuery }, "tavily-search variant failed");
       }
-      const data = (await r.json()) as TavilyResponse;
-      const results = (data.results ?? []).filter((res) => isProfileUrl(res.url));
-
-      // CSV-style output the verifier can predicate over.
-      const csvHeader = "category,full_name,current_job_title,company_name,location,linkedin_url\n";
-      const rows = results.slice(0, limit).map((res) => {
-        const parsed = parseTitle(res.title);
-        return [step.args["category"] ?? slugify(query), parsed.name, parsed.role, parsed.company, "", res.url.split("?")[0]].join(",");
-      }).join("\n");
-      const csv = csvHeader + (rows || "");
-
-      return {
-        ok: results.length > 0,
-        output: { count: results.length, csv },
-        evidence: `tavily: ${results.length} profile(s) for "${tavilyQuery}"`,
-        durationMs: Date.now() - started,
-        facts: { count: results.length, engine: "tavily", query: tavilyQuery },
-      };
-    } catch (err) {
-      logger.warn({ err, query: tavilyQuery }, "tavily-search engine failed");
-      return {
-        ok: false,
-        error: String(err).slice(0, 200),
-        durationMs: Date.now() - started,
-      };
     }
+
+    // CSV-style output the verifier can predicate over.
+    const csvHeader = "category,full_name,current_job_title,company_name,location,linkedin_url\n";
+    const csv = csvHeader + allRows.join("\n");
+    const evidence = `tavily: ${totalOk} unique profile(s) across ${variants.length} variant(s) [${seenVariants.join(", ")}]`;
+
+    return {
+      ok: totalOk > 0,
+      output: { count: totalOk, csv, variants: variants.length },
+      evidence,
+      error: totalOk === 0 ? firstError ?? "no profiles found" : undefined,
+      durationMs: Date.now() - started,
+      facts: { count: totalOk, engine: "tavily", variants: variants.length },
+    };
   },
 };
