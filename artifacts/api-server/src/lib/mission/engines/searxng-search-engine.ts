@@ -102,8 +102,11 @@ export const searxngSearchEngine: Engine = {
     const limit = Math.min(Number(step.args["limit"] ?? DEFAULT_LIMIT), 50);
     const site = String(step.args["site"] ?? "linkedin.com");
     const category = String(step.args["category"] ?? slugify(query));
-    // Engines to query (SearXNG supports comma-separated list, "all" uses every configured one)
-    const enginesParam = String(step.args["engines"] ?? "google,bing,duckduckgo,brave,startpage");
+    // Engines to query (SearXNG supports comma-separated list).
+    // Default is the conservative set: Bing + Startpage + DuckDuckGo. Google
+    // and Brave aggressively rate-limit Render's shared IP, so we exclude
+    // them by default. Operators can override via args.engines.
+    const enginesParam = String(step.args["engines"] ?? "bing,startpage,duckduckgo");
 
     // Fanout variants (same pattern as tavily-search)
     const variants = Array.isArray(step.args["query_variants"])
