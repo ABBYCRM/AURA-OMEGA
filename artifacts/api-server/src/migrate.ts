@@ -503,6 +503,46 @@ CREATE INDEX IF NOT EXISTS "bos_install_runs_device_idx" ON "bos_install_runs" (
 CREATE INDEX IF NOT EXISTS "bos_install_runs_adapter_idx" ON "bos_install_runs" ("adapter");
 `;
 
+// Mission Kernel schema — durable, event-driven runtime state. Idempotent.
+const MISSION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS "missions" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "goal" text NOT NULL,
+  "desired_state" jsonb DEFAULT '{}' NOT NULL,
+  "current_state" jsonb DEFAULT '{}' NOT NULL,
+  "plan" jsonb DEFAULT '[]' NOT NULL,
+  "context" jsonb DEFAULT '{}' NOT NULL,
+  "memory_keys" text[] DEFAULT '{}' NOT NULL,
+  "engines" text[] DEFAULT '{}' NOT NULL,
+  "attempts" integer DEFAULT 0 NOT NULL,
+  "confidence" real DEFAULT 0 NOT NULL,
+  "progress" real DEFAULT 0 NOT NULL,
+  "parent_id" integer,
+  "status" text DEFAULT 'new' NOT NULL,
+  "verification" jsonb DEFAULT '{}' NOT NULL,
+  "world_snapshot" jsonb DEFAULT '{}' NOT NULL,
+  "event_queue" jsonb DEFAULT '[]' NOT NULL,
+  "last_error" text,
+  "created_by" text DEFAULT 'operator' NOT NULL,
+  "started_at" timestamp,
+  "updated_at" timestamp DEFAULT now() NOT NULL,
+  "completed_at" timestamp
+);
+CREATE INDEX IF NOT EXISTS "missions_status_idx" ON "missions" ("status");
+CREATE INDEX IF NOT EXISTS "missions_parent_idx" ON "missions" ("parent_id");
+CREATE INDEX IF NOT EXISTS "missions_updated_idx" ON "missions" ("updated_at");
+
+CREATE TABLE IF NOT EXISTS "mission_events" (
+  "id" serial PRIMARY KEY NOT NULL,
+  "mission_id" integer NOT NULL,
+  "kind" text NOT NULL,
+  "payload" jsonb DEFAULT '{}' NOT NULL,
+  "source" text,
+  "received_at" timestamp DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "mission_events_mission_idx" ON "mission_events" ("mission_id", "received_at");
+`;
+
 export async function runMigrations(): Promise<void> {
   // The connection acquire is INSIDE the try: if the database is unreachable
   // (deleted free-tier DB, cold start, transient network), pool.connect() must
@@ -520,7 +560,8 @@ export async function runMigrations(): Promise<void> {
     await client.query(MEM0_SCHEMA_SQL);
     await client.query(DOCLING_SCHEMA_SQL);
     await client.query(BOS_SCHEMA_SQL);
-    logger.info("Schema ready (core + hermes + openhands + crawl4ai + mem0 + docling + bos)");
+    await client.query(MISSION_SCHEMA_SQL);
+    logger.info("Schema ready (core + hermes + openhands + crawl4ai + mem0 + docling + bos + mission)");
 
     // Always run — ON CONFLICT clauses make both statements idempotent.
     await client.query(SEED_AGENTS);

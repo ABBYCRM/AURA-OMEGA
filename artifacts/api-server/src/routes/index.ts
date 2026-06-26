@@ -26,6 +26,7 @@ import crawl4aiRouter from "./crawl4ai";
 import mem0Router from "./mem0";
 import doclingRouter from "./docling";
 import { devicesRouter } from "@workspace/remote-control/routes";
+import { missionsRouter } from "./missions";
 import { requireOperator } from "../lib/auth";
 
 const router: IRouter = Router();
@@ -55,6 +56,7 @@ router.use("/crawl4ai", crawl4aiRouter);
 router.use("/mem0", mem0Router);
 router.use("/docling", doclingRouter);
 router.use("/devices", devicesRouter);
+router.use("/missions", missionsRouter);
 router.use(requireOperator, vaultRouter);
 router.use(requireOperator, socialRouter);
 router.use("/hermes", hermesRouter);
