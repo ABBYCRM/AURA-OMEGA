@@ -71,7 +71,7 @@ function fmtRelative(iso: string | null | undefined): string {
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
-    <div className="rounded-xl border border-border bg-card px-4 py-3">
+    <div className="rounded-xl border border-border bg-card px-3 py-2.5 sm:px-4 sm:py-3">
       <div className="text-[10px] uppercase tracking-widest font-semibold text-muted-foreground/70">{label}</div>
       <div className="text-2xl font-black mt-1">{value}</div>
       {sub && <div className="text-[11px] text-muted-foreground/80 mt-0.5">{sub}</div>}
@@ -144,34 +144,34 @@ export default function HermesPage() {
 
   return (
     <div className="flex-1 min-w-0 min-h-0 overflow-y-auto bg-background">
-      <div className="max-w-6xl mx-auto px-6 py-8">
+      <div className="max-w-6xl mx-auto px-4 py-5 sm:px-6 sm:py-8">
 
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-5 sm:mb-6">
+          <div className="min-w-0">
             <div className="flex items-center gap-2.5 mb-1">
-              <Boxes className="w-5 h-5 text-primary" />
-              <h1 className="text-2xl font-black tracking-tight">Hermes</h1>
+              <Boxes className="w-5 h-5 text-primary shrink-0" />
+              <h1 className="text-xl sm:text-2xl font-black tracking-tight">Hermes</h1>
             </div>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs sm:text-sm text-muted-foreground">
               Persistent runtime: closed-loop learning, skill library, heartbeat.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={allRefresh}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-sm font-medium hover:bg-muted transition-colors"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 min-h-[44px] text-sm font-medium hover:bg-muted active:bg-muted/70 transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              Refresh
+              <span className="hidden xs:inline sm:inline">Refresh</span>
             </button>
             <button
               onClick={runHeartbeat}
               disabled={heartbeatRunning}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-primary/12 text-primary border border-primary/20 px-3 py-2 text-sm font-medium hover:bg-primary/20 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-primary/12 text-primary border border-primary/20 px-3 min-h-[44px] text-sm font-medium hover:bg-primary/20 active:bg-primary/25 transition-colors disabled:opacity-50"
             >
               <PlayCircle className="w-4 h-4" />
-              {heartbeatRunning ? "Running…" : "Run heartbeat"}
+              <span>{heartbeatRunning ? "Running…" : "Run heartbeat"}</span>
             </button>
           </div>
         </div>
@@ -185,7 +185,7 @@ export default function HermesPage() {
         ) : null}
 
         {/* Stat cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3 mb-5 sm:mb-6">
           <StatCard
             label="Skills"
             value={s?.skills.total ?? "—"}
@@ -209,7 +209,7 @@ export default function HermesPage() {
         </div>
 
         {/* Skills section */}
-        <section className="mb-8">
+        <section className="mb-6 sm:mb-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-primary" />
@@ -229,7 +229,7 @@ export default function HermesPage() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 sm:gap-3">
               {[...activeSkills, ...candidateSkills, ...retiredSkills].map((skill) => (
                 <div
                   key={skill.id}
@@ -241,7 +241,7 @@ export default function HermesPage() {
                   )}
                 >
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="font-mono text-sm font-semibold truncate">{skill.name}</div>
+                    <div className="font-mono text-xs sm:text-sm font-semibold truncate">{skill.name}</div>
                     <div className={cn(
                       "shrink-0 text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full",
                       skill.status === "active"   && "bg-primary/15 text-primary",
@@ -273,7 +273,7 @@ export default function HermesPage() {
         </section>
 
         {/* Sessions section */}
-        <section className="mb-8">
+        <section className="mb-6 sm:mb-8">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold flex items-center gap-2">
               <ScrollText className="w-4 h-4 text-primary" />
@@ -335,7 +335,7 @@ export default function HermesPage() {
 
         {/* Heartbeat report */}
         {lastReport && (
-          <section className="mb-8">
+          <section className="mb-6 sm:mb-8">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold flex items-center gap-2">
                 <Activity className="w-4 h-4 text-primary" />
@@ -343,7 +343,7 @@ export default function HermesPage() {
               </h2>
             </div>
             <div className="rounded-xl border border-border bg-card p-4 text-sm space-y-2">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-3">
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-muted-foreground/70">Nudges</div>
                   <div className="font-mono font-semibold">{lastReport.nudgesProcessed}</div>
