@@ -8,6 +8,7 @@ import { integrationStatus, nvidiaConfigured } from "./lib/integrations";
 import { startScheduler } from "./lib/scheduler";
 import { startInternalAutonomyLoop } from "./lib/n8n/internalAutonomy";
 import { scheduleHeartbeat } from "./lib/hermes";
+import { installFinalAnswerCrashGuard } from "./lib/runtimeGuards";
 
 /**
  * Runtime crash guard for legacy orchestrator builds.
@@ -20,12 +21,7 @@ import { scheduleHeartbeat } from "./lib/hermes";
  * not defined` and turn a successful operator response into an orchestration
  * error.
  */
-declare global {
-  // eslint-disable-next-line no-var
-  var finalAnswer: string | undefined;
-}
-
-globalThis.finalAnswer ??= "";
+installFinalAnswerCrashGuard();
 
 const rawPort = process.env["PORT"];
 
