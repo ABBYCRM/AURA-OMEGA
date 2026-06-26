@@ -18,6 +18,7 @@ import {
   ServerCog,
   Sparkles,
   Boxes,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -34,6 +35,7 @@ import { toast } from "sonner";
 // sits behind a single "More" drawer. No theatrical 12-link sidebar.
 const moreNav = [
   { href: "/hermes",      icon: Boxes,         label: "Hermes",        hint: "Runtime · skills · heartbeat" },
+  { href: "/remote",      icon: Smartphone,    label: "Remote Control",hint: "BOS-OMEGA devices" },
   { href: "/agents",      icon: Bot,           label: "Agents",        hint: "ABBY + AURAs" },
   { href: "/tasks",       icon: Network,       label: "Tasks",         hint: "Task queue" },
   { href: "/tools",       icon: Workflow,      label: "Tools",         hint: "Tool matrix" },
