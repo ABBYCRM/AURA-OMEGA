@@ -299,6 +299,29 @@ devicesRouter.post("/rustdesk/build-connect-url", (req, res) => {
   res.json({ ok: true, url, generatedPassword: password ? null : generatedPwd });
 });
 
+// ─── Bootstrap Installer — serve the .ps1 script from the repo ─────────
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+devicesRouter.get("/bootstrap/bos-omega-bootstrap.ps1", (_req, res) => {
+  // Walk up from packages/remote-control/src/routes.ts to repo root.
+  const candidates = [
+    join(process.cwd(), "scripts/bos-omega-bootstrap.ps1"),
+    join(process.cwd(), "../../scripts/bos-omega-bootstrap.ps1"),
+    join(process.cwd(), "../../../scripts/bos-omega-bootstrap.ps1"),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      const text = readFileSync(p, "utf-8");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Content-Disposition", 'attachment; filename="bos-omega-bootstrap.ps1"');
+      res.send(text);
+      return;
+    }
+  }
+  res.status(404).json({ ok: false, error: "bootstrap script not found in repo" });
+});
+
 function scriptForAdapter(adapter: AdapterName): string {
   switch (adapter) {
     case "tailscale": return "install-tailscale.ps1";
