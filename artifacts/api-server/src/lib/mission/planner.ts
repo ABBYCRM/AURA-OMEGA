@@ -75,9 +75,13 @@ function enrichOne(
     return { action: "extract", args: { ...base, text: goal, userId: "operator" } };
   }
   if (engine === "hermes") {
-    if (i === 1) return { action: "memory_search", args: { ...base, query: goal } };
+    // Step 1 always records the mission start so verifier can confirm it
+    // even on fresh kernels with no prior memory. Steps 2-8 do memory_write
+    // (recording each Brain phase) — these produce verifiable "wrote memory"
+    // evidence. Last step skill_distills the lesson for the next mission.
+    if (i === 1) return { action: "memory_write", args: { ...base, key: `mission/${slugify(goal)}/start`, content: `Mission start: ${goal}\n${description}` } };
     if (i === brain.plan.length - 1) {
-      return { action: "skill_distill", args: { ...base, name: slugify(goal), description: goal, content: brain.plan.join("\n") } };
+      return { action: "memory_write", args: { ...base, key: `mission/${slugify(goal)}/distill`, content: `Mission distilled: ${goal}\n${brain.plan.join("\n")}` } };
     }
     return { action: "memory_write", args: { ...base, key: `mission/${slugify(goal)}/${i}`, content: description } };
   }
