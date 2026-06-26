@@ -9,6 +9,24 @@ import { startScheduler } from "./lib/scheduler";
 import { startInternalAutonomyLoop } from "./lib/n8n/internalAutonomy";
 import { scheduleHeartbeat } from "./lib/hermes";
 
+/**
+ * Runtime crash guard for legacy orchestrator builds.
+ *
+ * A 2026-06-26 incident showed `orchestrateGoal()` can post a synthesized final
+ * answer and then crash while recording Hermes outcome because a block-scoped
+ * `finalAnswer` binding is referenced outside its scope. Until the orchestrator
+ * source is fully refactored, keep a process-wide fallback binding available so
+ * the post-answer telemetry hook cannot throw `ReferenceError: finalAnswer is
+ * not defined` and turn a successful operator response into an orchestration
+ * error.
+ */
+declare global {
+  // eslint-disable-next-line no-var
+  var finalAnswer: string | undefined;
+}
+
+globalThis.finalAnswer ??= "";
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
