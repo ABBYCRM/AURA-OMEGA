@@ -6,6 +6,8 @@ import { RustDeskAdapter } from "./adapters/rustdesk.adapter";
 import { MeshCentralAdapter } from "./adapters/meshcentral.adapter";
 import { GuacamoleAdapter } from "./adapters/guacamole.adapter";
 import { NoVNCAdapter } from "./adapters/novnc.adapter";
+import { SunshineAdapter } from "./adapters/sunshine.adapter";
+import { ScrcpyAdapter } from "./adapters/scrcpy.adapter";
 
 describe("remote-control adapter registry", () => {
   it("registers all 7 adapters", () => {
@@ -21,8 +23,8 @@ describe("remote-control adapter registry", () => {
     expect(ts.stage).toBe(1);
   });
 
-  it.each<AdapterName>(["tailscale", "rustdesk", "meshcentral", "guacamole", "novnc", "sunshine", "scrcpy"])(
-    "%s adapter throws not-implemented for screenshot until Round B/C/D",
+  it.each<AdapterName>(["tailscale", "rustdesk", "meshcentral", "guacamole", "novnc", "sunshine"])(
+    "%s adapter throws not-implemented for screenshot until its stage lands",
     (name) => {
       const a = getAdapter(name);
       expect(() =>
@@ -202,5 +204,97 @@ describe("novnc adapter", () => {
     const r = await a.connect(ctx, { host: "wss://novnc.example.com", options: { wsUrl: "wss://novnc.example.com/websockify/6000" } });
     expect(r.ok).toBe(true);
     expect(r.url).toContain("wsUrl");
+  });
+});
+
+describe("sunshine adapter", () => {
+  const a = new SunshineAdapter();
+
+  it("builds moonlight:// pair URL", () => {
+    const url = a.buildStreamUrl({ host: "gaming-pc.local:47984", pin: "1234", stream: "Desktop" });
+    expect(url).toContain("moonlight://pair");
+    expect(url).toContain("pin=1234");
+    expect(url).toContain("stream=Desktop");
+  });
+
+  it("isValidPin accepts 4 digits", () => {
+    expect(SunshineAdapter.isValidPin("1234")).toBe(true);
+    expect(SunshineAdapter.isValidPin("9999")).toBe(true);
+  });
+
+  it("isValidPin rejects non-4-digit", () => {
+    expect(SunshineAdapter.isValidPin("123")).toBe(false);
+    expect(SunshineAdapter.isValidPin("abcd")).toBe(false);
+    expect(SunshineAdapter.isValidPin("12345")).toBe(false);
+  });
+
+  it("connect requires host", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("connect requires valid pin", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "https://gaming-pc:47984", options: { pin: "12" } });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("4 digits");
+  });
+
+  it("connect with valid pin returns moonlight URL", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "https://gaming-pc:47984", options: { pin: "4321" } });
+    expect(r.ok).toBe(true);
+    expect(r.url).toContain("moonlight://pair");
+  });
+});
+
+describe("scrcpy adapter", () => {
+  const a = new ScrcpyAdapter();
+
+  it("builds basic args with no options", () => {
+    const args = a.buildArgs({ binaryPath: "x", adbPath: "y" });
+    expect(args).toEqual([]);
+  });
+
+  it("builds args with serial", () => {
+    const args = a.buildArgs({ binaryPath: "x", adbPath: "y", serial: "ABC123" });
+    expect(args).toEqual(["--serial", "ABC123"]);
+  });
+
+  it("builds args with max-size + bitrate + no-control + record", () => {
+    const args = a.buildArgs({
+      binaryPath: "x",
+      adbPath: "y",
+      maxSize: 1920,
+      bitrate: "8M",
+      noControl: true,
+      recordTo: "out.mp4",
+    });
+    expect(args).toContain("--max-size");
+    expect(args).toContain("1920");
+    expect(args).toContain("--bit-rate");
+    expect(args).toContain("8M");
+    expect(args).toContain("--no-control");
+    expect(args).toContain("--record");
+    expect(args).toContain("out.mp4");
+  });
+
+  it("connect returns scrcpy:// URL", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "pc-host", options: { serial: "DEV1" } });
+    expect(r.ok).toBe(true);
+    expect(r.url).toContain("scrcpy://pc-host");
+    expect(r.url).toContain("serial=DEV1");
+  });
+
+  it("screenshot returns a valid 1x1 PNG placeholder", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const buf = await a.screenshot(ctx, "host");
+    // PNG magic header
+    expect(buf[0]).toBe(0x89);
+    expect(buf[1]).toBe(0x50);
+    expect(buf[2]).toBe(0x4e);
+    expect(buf[3]).toBe(0x47);
   });
 });

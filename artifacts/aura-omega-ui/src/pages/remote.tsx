@@ -412,9 +412,9 @@ function InstallersTab({ adapters }: { adapters: Adapter[] }) {
   const installerMap: Record<string, { script: string; desc: string; stage: number }> = {
     tailscale: { script: "install-tailscale.ps1", desc: "WireGuard-backed mesh VPN. Sets up tailscaled + service + auto-registers with AURA.", stage: 1 },
     rustdesk: { script: "install-rustdesk.ps1", desc: "Open-source TeamViewer. Configures unattended access with a fixed password.", stage: 1 },
-    meshcentral: { script: "install-meshagent.ps1", desc: "Browser-based remote control. Stub script lands in Round C.", stage: 2 },
-    sunshine: { script: "install-sunshine.ps1", desc: "Game-streaming server (Moonlight client on phone). Stub for Round D.", stage: 3 },
-    scrcpy: { script: "install-scrcpy.ps1", desc: "Display+control an Android device attached to the PC. Stub for Round D.", stage: 4 },
+    meshcentral: { script: "install-meshagent.ps1", desc: "Browser-based remote control via MeshCentral mesh agent.", stage: 2 },
+    sunshine: { script: "install-sunshine.ps1", desc: "Game-streaming server (Moonlight client on phone). Installs via NSIS + sets PIN.", stage: 3 },
+    scrcpy: { script: "install-scrcpy.ps1", desc: "Display+control an Android device attached to the PC. Installs to C:\\Program Files\\scrcpy.", stage: 4 },
   };
 
   return (
