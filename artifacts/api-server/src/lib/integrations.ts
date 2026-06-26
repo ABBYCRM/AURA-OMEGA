@@ -55,7 +55,8 @@ export function nvidiaKeys(): string[] {
   };
   add(process.env["NVIDIA_API_KEY"]);
   add(process.env["NVIDIA_API_KEYS"]);
-  for (let i = 2; i <= 12; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
+  // Numbered extras up to _32 — sufficient for any realistic key pool.
+  for (let i = 2; i <= 32; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
   return out;
 }
 
