@@ -317,6 +317,42 @@ export function traceLlmRun(trace: LlmTrace): void {
   })();
 }
 
+/**
+ * Non-streaming chat completion against the configured LLM provider
+ * (NVIDIA NIM → Helicone → OpenRouter). Returns the assistant text.
+ *
+ * Shared by orchestrator.ts and lib/hermes/llm.ts so both code paths incur
+ * the same routing, headers, and tracing.
+ */
+export async function completeChat(
+  model: string,
+  system: string,
+  user: string,
+  maxTokens = 800,
+): Promise<string> {
+  const r = await fetch(`${llmBaseUrl()}/chat/completions`, {
+    method: "POST",
+    headers: llmHeaders(),
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      stream: false,
+      max_tokens: maxTokens,
+    }),
+  });
+  if (!r.ok) {
+    const errText = (await r.text()).slice(0, 200);
+    throw new Error(`LLM ${r.status}: ${errText}`);
+  }
+  const data = (await r.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
+}
+
 // ─── E2B (cloud code-interpreter sandbox) ────────────────────────────────────
 // Runs code in a fully isolated remote sandbox via E2B. The SDK is loaded with a
 // runtime dynamic import so the package is OPTIONAL — if it isn't installed the
