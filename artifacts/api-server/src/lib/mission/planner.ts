@@ -68,7 +68,7 @@ function enrichOne(
 ): { action: string; args: Record<string, unknown> } {
   const base = { goal, stepIndex: i, taskType: brain.taskType };
 
-  if (engine === "crawl4ai" && i > 0) {
+  if (engine === "crawl4ai") {
     return { action: "crawl", args: { ...base, seeds: [buildSeedUrl(goal)], maxPages: 5 } };
   }
   if (engine === "mem0") {
