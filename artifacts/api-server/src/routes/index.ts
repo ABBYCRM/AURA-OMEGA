@@ -21,6 +21,7 @@ import n8nRouter from "./n8n";
 import mvpGovernorRouter from "./mvpGovernor";
 import settingsRouter from "./settings";
 import hermesRouter from "./hermes";
+import openhandsRouter from "./openhands";
 import { requireOperator } from "../lib/auth";
 
 const router: IRouter = Router();
@@ -45,6 +46,7 @@ router.use(integrationsRouter);
 router.use(selfCheckRouter);
 router.use(authRouter);
 router.use("/hermes", hermesRouter);
+router.use("/openhands", openhandsRouter);
 router.use(requireOperator, vaultRouter);
 router.use(requireOperator, socialRouter);
 router.use("/hermes", hermesRouter);
