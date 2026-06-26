@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { BrainCircuit, Gauge, Lock, Moon, Save, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { BrainCircuit, Gauge, Lock, Moon, Save, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud, Download, Copy, Terminal, Check } from "lucide-react";
 
-type Tab = "runtime" | "personality";
+type Tab = "runtime" | "personality" | "bootstrap";
 
 export default function Settings() {
   const [tab, setTab] = useState<Tab>("runtime");
@@ -105,15 +105,16 @@ export default function Settings() {
         </header>
 
         {/* Tab bar */}
-        <div className="flex gap-1 rounded-xl border border-card-border bg-card/50 p-1 w-fit">
+        <div className="flex gap-1 rounded-xl border border-card-border bg-card/50 p-1 w-fit overflow-x-auto">
           {([
             { id: "runtime", label: "Runtime", icon: <SlidersHorizontal className="w-4 h-4" /> },
             { id: "personality", label: "Personality", icon: <Sparkles className="w-4 h-4" /> },
+            { id: "bootstrap", label: "Bootstrap Installer", icon: <Terminal className="w-4 h-4" /> },
           ] as { id: Tab; label: string; icon: React.ReactNode }[]).map(({ id, label, icon }) => (
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition-colors ${
+              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold transition-colors whitespace-nowrap ${
                 tab === id
                   ? "bg-primary text-primary-foreground shadow"
                   : "text-muted-foreground hover:text-foreground"
@@ -280,7 +281,218 @@ export default function Settings() {
             </div>
           </section>
         )}
+
+        {/* ── Bootstrap Installer tab ── */}
+        {tab === "bootstrap" && <BootstrapInstallerTab />}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Bootstrap Installer tab — BOS-OMEGA
+// ─────────────────────────────────────────────────────────────────────────
+function BootstrapInstallerTab() {
+  const [copied, setCopied] = useState(false);
+  const bootstrapCmd = "irm https://bos-omega.dev/install.ps1 | iex";
+  const ps1Url = "/api/devices/bootstrap/bos-omega-bootstrap.ps1";
+
+  function copy() {
+    navigator.clipboard.writeText(bootstrapCmd);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  const executionSteps = [
+    "PowerShell",
+    "Download Bootstrap",
+    "Detect Environment",
+    "Install Dependencies",
+    "Clone BOS-OMEGA",
+    "Configure Runtime",
+    "Install Tailscale",
+    "Install RustDesk",
+    "Install MeshCentral Agent",
+    "Install Sunshine",
+    "Install BOS PC Agent",
+    "Install Services",
+    "Install Runtime",
+    "Start Runtime",
+    "Verify Components",
+    "Launch BOS",
+    "Display Dashboard",
+  ];
+
+  const runtimeSteps = [
+    { label: "BOS Runtime", status: "ready" },
+    { label: "Scheduler", status: "ready" },
+    { label: "Memory", status: "ready" },
+    { label: "Agents", status: "ready" },
+    { label: "API", status: "ready" },
+    { label: "Remote Control", status: "ready" },
+    { label: "Tools", status: "ready" },
+    { label: "Executive Brain (Future)", status: "future" },
+  ];
+
+  const deviceRegistrations = [
+    { name: "Windows PC", status: "available" },
+    { name: "Phone", status: "available" },
+    { name: "Tablet", status: "available" },
+    { name: "Future Glasses", status: "future" },
+  ];
+
+  const installSteps = [
+    "Bootstrap", "Git", "Node", "pnpm", "Python", "Docker (Optional)",
+    "BOS Runtime", "Dependencies", "Configuration", "Device Registration",
+    "Engine Registration", "Ready",
+  ];
+
+  return (
+    <section className="space-y-6">
+      {/* Command box */}
+      <div className="rounded-2xl border border-cyan-500/30 bg-card/50 p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-xs font-black uppercase tracking-widest text-cyan-400">BOS-OMEGA</span>
+          <span className="text-xs font-black uppercase tracking-widest text-muted-foreground">Bootstrap</span>
+        </div>
+        <h2 className="text-2xl font-black">Install BOS-OMEGA on a Windows PC</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Copy the command below and paste it into <span className="text-foreground font-medium">Windows PowerShell (Run as Administrator)</span>.
+          The bootstrap will detect your environment, install every adapter, register the device, and launch the dashboard.
+        </p>
+        <div className="mt-5 relative">
+          <pre className="rounded-xl border border-card-border bg-black/50 p-4 pr-24 font-mono text-sm text-cyan-300 overflow-x-auto whitespace-pre">
+{bootstrapCmd}
+          </pre>
+          <div className="absolute top-3 right-3 flex gap-2">
+            <button
+              onClick={copy}
+              className="inline-flex items-center gap-1 rounded-md bg-cyan-500 px-3 py-1.5 text-xs font-bold text-black hover:bg-cyan-400 transition-colors"
+              aria-label="Copy command"
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <a
+              href={ps1Url}
+              download
+              className="inline-flex items-center gap-1 rounded-md border border-card-border bg-background/70 px-3 py-1.5 text-xs font-bold text-foreground hover:bg-card transition-colors"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </a>
+          </div>
+        </div>
+      </div>
+
+      {/* Bootstrap Execution */}
+      <div className="rounded-2xl border border-card-border bg-card/50 p-6">
+        <h2 className="text-lg font-black">Bootstrap Execution</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Each step is idempotent. If anything fails the bootstrap resumes from the failing step on re-run.</p>
+        <ol className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-sm">
+          {executionSteps.map((step, i) => (
+            <li key={step} className="flex items-center gap-2 rounded-lg border border-card-border bg-background/40 px-3 py-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-xs font-bold text-cyan-400">
+                {i + 1}
+              </span>
+              <span className="text-foreground">{step}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* Runtime Installation */}
+      <div className="rounded-2xl border border-card-border bg-card/50 p-6">
+        <h2 className="text-lg font-black">Runtime Installation</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Components installed by the bootstrap.</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {installSteps.map((step) => (
+            <span key={step} className="rounded-full border border-card-border bg-background/40 px-3 py-1 text-xs font-bold text-foreground">
+              {step}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Device Registration */}
+      <div className="rounded-2xl border border-card-border bg-card/50 p-6">
+        <h2 className="text-lg font-black">Device Registration</h2>
+        <p className="mt-1 text-sm text-muted-foreground">The bootstrap auto-registers the Windows PC. Register other devices from the Remote Control page.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {deviceRegistrations.map((d) => (
+            <div
+              key={d.name}
+              className={`flex items-center justify-between rounded-xl border border-card-border bg-background/40 px-4 py-3 ${
+                d.status === "future" ? "opacity-60" : ""
+              }`}
+            >
+              <div>
+                <div className="font-bold text-sm">{d.name}</div>
+                <div className="text-xs text-muted-foreground capitalize">{d.status === "future" ? "Planned" : "Ready to register"}</div>
+              </div>
+              <span
+                className={`text-xs px-2 py-1 rounded font-bold ${
+                  d.status === "future" ? "bg-white/5 text-white/40" : "bg-cyan-500/20 text-cyan-400"
+                }`}
+              >
+                {d.status === "future" ? "Future" : "Available"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Runtime components */}
+      <div className="rounded-2xl border border-card-border bg-card/50 p-6">
+        <h2 className="text-lg font-black">Runtime</h2>
+        <p className="mt-1 text-sm text-muted-foreground">The components that come online after bootstrap completes.</p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {runtimeSteps.map((c) => (
+            <div
+              key={c.label}
+              className={`flex items-center justify-between rounded-lg border border-card-border bg-background/40 px-3 py-2 ${
+                c.status === "future" ? "opacity-60" : ""
+              }`}
+            >
+              <span className="text-sm font-bold">{c.label}</span>
+              <span
+                className={`text-xs px-2 py-0.5 rounded ${
+                  c.status === "future" ? "bg-white/5 text-white/40" : "bg-emerald-500/20 text-emerald-400"
+                }`}
+              >
+                {c.status === "future" ? "Future" : "Ready"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* User Experience flow */}
+      <div className="rounded-2xl border border-card-border bg-card/50 p-6">
+        <h2 className="text-lg font-black">User Experience</h2>
+        <p className="mt-1 text-sm text-muted-foreground">From PowerShell to "BOS is running" in under five minutes.</p>
+        <ol className="mt-4 grid gap-2 text-sm">
+          {[
+            "User opens BOS",
+            "Goes to Settings → Bootstrap Installer",
+            "Copies the command",
+            "Pastes it into PowerShell (Admin)",
+            "Presses Enter",
+            "Everything installs",
+            "BOS starts automatically",
+            "Phone connects",
+            "PC connects",
+            "Ready",
+          ].map((step, i) => (
+            <li key={step} className="flex items-center gap-2 rounded-lg border border-card-border bg-background/40 px-3 py-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-xs font-bold text-cyan-400">
+                {i + 1}
+              </span>
+              <span className="text-foreground">{step}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
   );
 }
