@@ -7,6 +7,7 @@ import { logger } from "./lib/logger";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { boot as bootMissionKernel } from "./lib/mission";
 
 const app: Express = express();
 
@@ -59,6 +60,13 @@ app.get("/version", (_req, res) => {
 });
 
 app.use("/api", router);
+
+// Boot the Mission Kernel so it can resume in-flight missions and listen
+// for in-process step.completed events. Idempotent.
+if (process.env["DISABLE_MISSION_KERNEL"] !== "true") {
+  bootMissionKernel();
+  logger.info("Mission Kernel booted");
+}
 
 // In production, serve the Vite-built frontend if it was bundled into the image.
 const __filename_app = fileURLToPath(import.meta.url);
