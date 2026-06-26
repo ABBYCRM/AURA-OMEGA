@@ -28,6 +28,7 @@ import {
   CircleDot,
   CircleSlash,
   Settings as SettingsIcon,
+  Rocket,
 } from "lucide-react";
 
 interface Device {
@@ -418,53 +419,129 @@ function InstallersTab({ adapters }: { adapters: Adapter[] }) {
     scrcpy: { script: "install-scrcpy.ps1", desc: "Display+control an Android device attached to the PC. Installs to C:\\Program Files\\scrcpy.", stage: 4 },
   };
 
+  // The all-in-one installer command. Downloads every script in parallel via
+  // Start-BitsTransfer, unblocks the Mark-of-the-Web on each (kills Defender's
+  // "blocked because downloaded" warning), then runs the bootstrap which
+  // installs all 6 adapters in dependency order.
+  //
+  // Operator replaces the two REPLACE_ME placeholders. Tailscale auth key is
+  // generated at https://login.tailscale.com/admin/settings/keys. RustDesk
+  // password is whatever the operator wants unattended clients to use.
+  const ONE_BOX_COMMAND =
+    "$ErrorActionPreference=\"Stop\"; $ProgressPreference=\"SilentlyContinue\"; " +
+    "$f=\"https://raw.githubusercontent.com/ABBYCRM/AURA-OMEGA/main/scripts\"; " +
+    "$d=\"$env:USERPROFILE\\bos-install\"; " +
+    "New-Item -ItemType Directory -Force -Path $d|Out-Null; " +
+    "$s=@(\"bos-omega-bootstrap.ps1\",\"install-tailscale.ps1\",\"install-rustdesk.ps1\"," +
+    "\"install-meshagent.ps1\",\"install-sunshine.ps1\",\"install-scrcpy.ps1\",\"install-pc-agent.ps1\"); " +
+    "foreach($x in $s){$p=Join-Path $d $x; Write-Host \"[+] $x\" -ForegroundColor Cyan; " +
+    "try{Start-BitsTransfer -Source \"$f/$x\" -Destination $p -ErrorAction Stop}" +
+    "catch{Invoke-WebRequest \"$f/$x\" -OutFile $p -UseBasicParsing}; " +
+    "Unblock-File $p -ErrorAction SilentlyContinue}; " +
+    "Write-Host \"[+] All scripts in $d\" -ForegroundColor Green; " +
+    "& (Join-Path $d \"bos-omega-bootstrap.ps1\") -Unattended " +
+    "-TailscaleAuthKey \"tskey-REPLACE_ME\" -RustDeskPassword \"ChangeMe123!\"";
+
   return (
-    <div className="p-4 space-y-3">
-      <p className="text-sm text-white/60 mb-2">
-        Run these PowerShell scripts as Administrator on the target Windows PC.
-      </p>
-      {adapters.map((a) => {
-        const info = installerMap[a.name];
-        if (!info) return null;
-        return (
-          <div key={a.name} className="p-3 bg-white/5 rounded-lg border border-white/10">
+    <div className="p-4 space-y-4">
+      {/* ONE BIG BOX — the entire install, single paste. */}
+      <div className="p-4 bg-gradient-to-br from-cyan-500/10 to-emerald-500/10 rounded-xl border border-cyan-500/30 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="text-base font-bold flex items-center gap-2">
+              <Rocket className="w-4 h-4 text-cyan-400" />
+              Install everything (one command)
+            </div>
+            <div className="text-xs text-white/60 mt-1 leading-relaxed">
+              Run as <span className="text-cyan-300 font-mono">Administrator</span> in PowerShell.
+              Downloads all 6 installer scripts in parallel, unblocks them, then runs the bootstrap
+              which installs <strong>Tailscale &rarr; RustDesk &rarr; PC Agent &rarr; MeshCentral &rarr; Sunshine &rarr; scrcpy</strong> in dependency order.
+            </div>
+          </div>
+          <CopyButton text={ONE_BOX_COMMAND} label="Copy all" />
+        </div>
+        <pre className="px-3 py-3 bg-black/60 rounded-lg text-[11px] font-mono overflow-x-auto whitespace-pre text-emerald-200/90 border border-emerald-500/20 max-h-64">
+{ONE_BOX_COMMAND}
+        </pre>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+          <div className="p-2 rounded bg-black/30 border border-white/10">
+            <div className="text-cyan-300 font-bold mb-1">1. Tailscale auth key</div>
+            <div className="text-white/60">Get one at{" "}
+              <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noreferrer" className="underline">login.tailscale.com</a>.
+              Replace <code className="text-amber-300">tskey-REPLACE_ME</code> in the command above.
+            </div>
+          </div>
+          <div className="p-2 rounded bg-black/30 border border-white/10">
+            <div className="text-cyan-300 font-bold mb-1">2. RustDesk password</div>
+            <div className="text-white/60">Password unattended clients use to connect.
+              Replace <code className="text-amber-300">ChangeMe123!</code> with whatever you want.
+            </div>
+          </div>
+        </div>
+        <details className="text-xs text-white/50">
+          <summary className="cursor-pointer hover:text-white/80 select-none">
+            ⚙️ Want to skip an adapter or install interactively?
+          </summary>
+          <div className="mt-2 space-y-1 font-mono text-[11px]">
+            <div>• Add <code className="text-cyan-300">-SkipRustDesk -SkipMeshCentral -SkipSunshine -SkipScrcpy</code> to install only Tailscale + PC Agent.</div>
+            <div>• Drop <code className="text-cyan-300">-Unattended</code> to be prompted for the auth key + password interactively.</div>
+            <div>• Drop <code className="text-cyan-300">-TailscaleAuthKey</code> entirely to log in via browser on first run.</div>
+            <div>• Override API target with <code className="text-cyan-300">-AuraApiBase https://your-render-app.onrender.com</code>.</div>
+          </div>
+        </details>
+      </div>
+
+      {/* Individual installers — collapsed by default, available if the operator */}
+      {/* wants to run them one at a time (e.g. troubleshooting one adapter). */}
+      <details className="rounded-xl border border-white/10 bg-white/5">
+        <summary className="p-3 cursor-pointer text-sm font-medium select-none hover:bg-white/5">
+          ⚙️ Run individual installers instead <span className="text-white/40 font-normal">(advanced / debugging)</span>
+        </summary>
+        <div className="p-3 pt-0 space-y-3">
+          {adapters.map((a) => {
+            const info = installerMap[a.name];
+            if (!info) return null;
+            return (
+              <div key={a.name} className="p-3 bg-white/5 rounded-lg border border-white/10">
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <div className="font-medium capitalize">{a.name}</div>
+                    <div className="text-xs text-white/50 mt-1">{info.desc}</div>
+                  </div>
+                  <span className="text-xs px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded">Stage {info.stage}</span>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <code className="flex-1 px-3 py-2 bg-black/40 rounded text-xs font-mono overflow-x-auto whitespace-nowrap">
+                    powershell -ExecutionPolicy Bypass -File .\{info.script}
+                  </code>
+                  <CopyButton text={`scripts/${info.script}`} />
+                </div>
+              </div>
+            );
+          })}
+          {/* pc-agent is a local helper, not in the adapter registry — render its card explicitly. */}
+          <div className="p-3 bg-white/5 rounded-lg border border-white/10">
             <div className="flex justify-between items-start mb-2">
               <div>
-                <div className="font-medium capitalize">{a.name}</div>
-                <div className="text-xs text-white/50 mt-1">{info.desc}</div>
+                <div className="font-medium">BOS PC Agent</div>
+                <div className="text-xs text-white/50 mt-1">{installerMap.pcagent.desc}</div>
               </div>
-              <span className="text-xs px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded">Stage {info.stage}</span>
+              <span className="text-xs px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded">Stage {installerMap.pcagent.stage}</span>
             </div>
             <div className="flex gap-2 mt-3">
               <code className="flex-1 px-3 py-2 bg-black/40 rounded text-xs font-mono overflow-x-auto whitespace-nowrap">
-                powershell -ExecutionPolicy Bypass -File .\{info.script}
+                powershell -ExecutionPolicy Bypass -File .\install-pc-agent.ps1
               </code>
-              <CopyButton text={`scripts/${info.script}`} />
+              <CopyButton text="scripts/install-pc-agent.ps1" />
             </div>
           </div>
-        );
-      })}
-      {/* pc-agent is a local helper, not in the adapter registry — render its card explicitly. */}
-      <div className="p-3 bg-white/5 rounded-lg border border-white/10">
-        <div className="flex justify-between items-start mb-2">
-          <div>
-            <div className="font-medium">BOS PC Agent</div>
-            <div className="text-xs text-white/50 mt-1">{installerMap.pcagent.desc}</div>
-          </div>
-          <span className="text-xs px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded">Stage {installerMap.pcagent.stage}</span>
         </div>
-        <div className="flex gap-2 mt-3">
-          <code className="flex-1 px-3 py-2 bg-black/40 rounded text-xs font-mono overflow-x-auto whitespace-nowrap">
-            powershell -ExecutionPolicy Bypass -File .\install-pc-agent.ps1
-          </code>
-          <CopyButton text="scripts/install-pc-agent.ps1" />
-        </div>
-      </div>
+      </details>
     </div>
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -473,10 +550,11 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
-      className="px-3 py-2 bg-white/10 rounded text-sm min-h-[44px] min-w-[44px] flex items-center"
-      aria-label="Copy"
+      className="px-3 py-2 bg-white/10 hover:bg-white/15 active:bg-white/20 rounded text-sm min-h-[44px] flex items-center gap-1.5"
+      aria-label={label}
     >
       <Copy className={cn("w-4 h-4", copied && "text-green-400")} />
+      <span className="text-xs font-medium">{copied ? "Copied" : label}</span>
     </button>
   );
 }
