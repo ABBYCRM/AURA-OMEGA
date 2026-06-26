@@ -16,6 +16,7 @@ import Agents from "@/pages/agents";
 import Tasks from "@/pages/tasks";
 import Settings from "@/pages/settings";
 import CronPage from "@/pages/cron";
+import RemotePage from "@/pages/remote";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ function Router() {
         <Route path="/runtimes" component={RuntimesPage} />
         <Route path="/integrations" component={IntegrationsConsole} />
         <Route path="/settings" component={Settings} />
+        <Route path="/remote" component={RemotePage} />
         <Route component={NotFound} />
       </Switch>
     </AppLayout>

@@ -3,6 +3,9 @@ import { getAdapter, listAdapters } from "./adapters";
 import type { AdapterName } from "./adapter";
 import { TailscaleAdapter } from "./adapters/tailscale.adapter";
 import { RustDeskAdapter } from "./adapters/rustdesk.adapter";
+import { MeshCentralAdapter } from "./adapters/meshcentral.adapter";
+import { GuacamoleAdapter } from "./adapters/guacamole.adapter";
+import { NoVNCAdapter } from "./adapters/novnc.adapter";
 
 describe("remote-control adapter registry", () => {
   it("registers all 7 adapters", () => {
@@ -119,5 +122,85 @@ describe("rustdesk adapter", () => {
     const r = await a.connect(ctx, { host: "x", options: { rustdeskId: "ABC" }, password: "pwd" });
     expect(r.ok).toBe(true);
     expect(r.url).toContain("rustdesk://connect");
+  });
+});
+
+describe("meshcentral adapter", () => {
+  const a = new MeshCentralAdapter();
+
+  it("builds session URL", () => {
+    const url = a.buildSessionUrl({ baseUrl: "https://mesh.example.com", meshId: "m1", sessionId: "s1" });
+    expect(url).toContain("mesh.ashx?action=session");
+    expect(url).toContain("meshname=m1");
+    expect(url).toContain("sessionid=s1");
+  });
+
+  it("isValidBaseUrl accepts https", () => {
+    expect(MeshCentralAdapter.isValidBaseUrl("https://mesh.example.com")).toBe(true);
+  });
+  it("isValidBaseUrl rejects garbage", () => {
+    expect(MeshCentralAdapter.isValidBaseUrl("not a url")).toBe(false);
+  });
+
+  it("connect requires meshcentralId + sessionId", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "https://mesh.example.com" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("meshcentralId");
+  });
+
+  it("connect returns full session URL with required options", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "https://mesh.example.com", options: { meshcentralId: "m1", sessionId: "s1" } });
+    expect(r.ok).toBe(true);
+    expect(r.url).toContain("mesh.ashx");
+  });
+});
+
+describe("guacamole adapter", () => {
+  const a = new GuacamoleAdapter();
+
+  it("builds browser connect URL with id + protocol", () => {
+    const url = a.buildConnectUrl({ baseUrl: "https://guac.example.com/guacamole/", connectionId: "5", protocol: "rdp" });
+    expect(url).toContain("id=5");
+    expect(url).toContain("p=rdp");
+  });
+
+  it("connect requires connectionId", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "https://guac.example.com" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("connect with connectionId returns URL", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "https://guac.example.com", options: { connectionId: "5", protocol: "vnc" } });
+    expect(r.ok).toBe(true);
+    expect(r.url).toContain("id=5");
+  });
+});
+
+describe("novnc adapter", () => {
+  const a = new NoVNCAdapter();
+
+  it("builds browser JSON config", () => {
+    const out = a.buildBrowserUrl({ wsUrl: "wss://novnc.example.com/websockify/6000", vncPassword: "pwd" });
+    const parsed = JSON.parse(out);
+    expect(parsed.wsUrl).toContain("wss://");
+    expect(parsed.password).toBe("pwd");
+    expect(parsed.autoconnect).toBe(true);
+  });
+
+  it("connect requires wsUrl", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "wss://novnc.example.com" });
+    expect(r.ok).toBe(false);
+  });
+
+  it("connect with wsUrl returns config JSON", async () => {
+    const ctx = { agentId: 0, agentName: "t", agentColor: "#000", channelId: null };
+    const r = await a.connect(ctx, { host: "wss://novnc.example.com", options: { wsUrl: "wss://novnc.example.com/websockify/6000" } });
+    expect(r.ok).toBe(true);
+    expect(r.url).toContain("wsUrl");
   });
 });
