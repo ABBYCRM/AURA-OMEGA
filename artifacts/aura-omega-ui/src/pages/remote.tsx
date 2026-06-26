@@ -444,6 +444,22 @@ function InstallersTab({ adapters }: { adapters: Adapter[] }) {
           </div>
         );
       })}
+      {/* pc-agent is a local helper, not in the adapter registry — render its card explicitly. */}
+      <div className="p-3 bg-white/5 rounded-lg border border-white/10">
+        <div className="flex justify-between items-start mb-2">
+          <div>
+            <div className="font-medium">BOS PC Agent</div>
+            <div className="text-xs text-white/50 mt-1">{installerMap.pcagent.desc}</div>
+          </div>
+          <span className="text-xs px-2 py-1 bg-cyan-500/20 text-cyan-400 rounded">Stage {installerMap.pcagent.stage}</span>
+        </div>
+        <div className="flex gap-2 mt-3">
+          <code className="flex-1 px-3 py-2 bg-black/40 rounded text-xs font-mono overflow-x-auto whitespace-nowrap">
+            powershell -ExecutionPolicy Bypass -File .\install-pc-agent.ps1
+          </code>
+          <CopyButton text="scripts/install-pc-agent.ps1" />
+        </div>
+      </div>
     </div>
   );
 }
