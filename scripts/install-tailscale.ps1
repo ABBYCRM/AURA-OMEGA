@@ -50,13 +50,35 @@ $msiArgs = @(
 )
 Start-Process -FilePath "msiexec.exe" -ArgumentList $msiArgs -Wait -NoNewWindow
 
-$tailscaleExe = "${env:ProgramFiles}\Tailscale\tailscale.exe"
-if (-not (Test-Path $tailscaleExe)) {
-    $tailscaleExe = "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
+# Tailscale 1.50+ installs to $env:ProgramFiles\Tailscale on a normal system-MSI
+# install, but a per-user install (no admin, or /jm= not used) drops it under
+# %LOCALAPPDATA%\Tailscale. Newer releases also expose tailscale.exe under the
+# user's AppData. Try each candidate in order; first hit wins.
+$tailscaleCandidates = @(
+    "${env:ProgramFiles}\Tailscale\tailscale.exe"
+    "${env:ProgramFiles(x86)}\Tailscale\tailscale.exe"
+    "$env:LOCALAPPDATA\Tailscale\tailscale.exe"
+    "$env:LOCALAPPDATA\Tailscale IP\tailscale.exe"
+)
+$tailscaleExe = $null
+foreach ($candidate in $tailscaleCandidates) {
+    if ($candidate -and (Test-Path $candidate)) {
+        $tailscaleExe = $candidate
+        break
+    }
 }
-if (-not (Test-Path $tailscaleExe)) {
-    throw "Tailscale install succeeded but tailscale.exe not found."
+if (-not $tailscaleExe) {
+    # Last-ditch: ask Windows where tailscale.exe is. Resolves the same way
+    # Start-Process would, including WOW64 / per-user install locations.
+    $resolved = (Get-Command tailscale.exe -ErrorAction SilentlyContinue)?.Source
+    if ($resolved -and (Test-Path $resolved)) {
+        $tailscaleExe = $resolved
+    }
 }
+if (-not $tailscaleExe) {
+    throw "Tailscale install succeeded but tailscale.exe not found. Searched: $($tailscaleCandidates -join ', '). Re-run with -Verbose or check Add/Remove Programs."
+}
+Log "tailscale.exe resolved to $tailscaleExe"
 
 Log "Starting tailscaled service..."
 & sc.exe create tailscaled start=auto binPath="`"$tailscaleExe`"" | Out-Null
