@@ -103,7 +103,7 @@ export const searxngSearchEngine: Engine = {
     const site = String(step.args["site"] ?? "linkedin.com");
     const category = String(step.args["category"] ?? slugify(query));
     // Engines to query (SearXNG supports comma-separated list, "all" uses every configured one)
-    const enginesParam = String(step.args["engines"] ?? "google,bing,duckduckgo,brave,startpage");
+    const enginesParam = String(step.args["engines"] ?? "bing,startpage,duckduckgo");
 
     // Fanout variants (same pattern as tavily-search)
     const variants = Array.isArray(step.args["query_variants"])
