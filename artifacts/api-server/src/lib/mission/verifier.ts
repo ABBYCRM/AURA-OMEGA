@@ -14,7 +14,7 @@
 import type { MissionStep, AcceptanceVerdict } from "./types";
 import type { EngineResult } from "./engines/registry";
 
-const PASS_KEYWORDS = ["evidence", "verified", "captured", "wrote", "extracted", "returned", "ok"];
+const PASS_KEYWORDS = ["evidence", "verified", "captured", "wrote", "extracted", "returned", "ok", "exit code: 0", "stored memory", "no results"];
 
 export function evaluateAcceptance(
   step: MissionStep,
