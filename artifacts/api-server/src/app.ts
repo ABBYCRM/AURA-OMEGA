@@ -70,12 +70,16 @@ if (process.env["DISABLE_MISSION_KERNEL"] !== "true") {
   // the existing TOOL_REGISTRY via runTool(). Agents 1 (ABBY, full authority)
   // and 2 (AURA-1, code) have the broadest tool access. Missions run as
   // ABBY by default.
-  setHermesToolRunner(async (tool, args, ctx) =>
-    runTool(tool, args, { agentId: ctx.agentId ?? 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
-  );
-  setOpenHandsToolRunner(async (tool, args, ctx) =>
-    runTool(tool, args, { agentId: ctx.agentId ?? 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
-  );
+  // Mission kernels always run as ABBY (agentId=1) which has the full tool set
+// — agents 2-6 each only have their specialty. The engine's own ToolContext
+// (with its agentId) is kept in the metadata for observability, but the
+// authoritative agent identity passed to runTool is always ABBY.
+setHermesToolRunner(async (tool, args, ctx) =>
+  runTool(tool, args, { agentId: 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+);
+setOpenHandsToolRunner(async (tool, args, ctx) =>
+  runTool(tool, args, { agentId: 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+);
   bootMissionKernel();
   logger.info("Mission Kernel booted (engines: hermes + openhands wired)");
 }
