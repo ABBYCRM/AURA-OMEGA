@@ -44,8 +44,8 @@ router.use(externalRouter);
 router.use(integrationsRouter);
 router.use(selfCheckRouter);
 router.use(authRouter);
+router.use("/hermes", hermesRouter);
 router.use(requireOperator, vaultRouter);
 router.use(requireOperator, socialRouter);
-router.use("/hermes", hermesRouter);
 
 export default router;
