@@ -308,7 +308,7 @@ function ScreenTab({ devices }: { devices: Device[] }) {
         {loading && <p className="text-white/40">Capturing…</p>}
         {!loading && imageUrl && <img src={imageUrl} alt="screenshot" className="w-full h-full object-contain" />}
         {!loading && !imageUrl && (
-          <p className="text-white/30 text-sm px-4 text-center">Tap Capture to grab a screenshot. Browser-based adapters (Guacamole, noVNC) return PNGs; binary adapters (RustDesk, Tailscale) need the screen stream path that lands in Round C.</p>
+          <p className="text-white/30 text-sm px-4 text-center">Tap Capture to grab a screenshot. Browser-based adapters (Guacamole, noVNC, MeshCentral) return PNGs from the gateway; binary adapters (RustDesk, Tailscale, scrcpy) return a 1×1 placeholder until pc-agent heartbeats carry the real frame.</p>
         )}
       </div>
     </div>
