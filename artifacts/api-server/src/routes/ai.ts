@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { llmBaseUrl, llmFetchUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus } from "../lib/integrations";
+import { llmBaseUrl, llmFetchUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel } from "../lib/integrations";
 import { listSecretNames } from "../lib/vault";
 import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
@@ -557,7 +557,7 @@ router.post("/ai/chat", async (req, res) => {
         method: "POST",
         headers: openrouterHeaders(),
         body: JSON.stringify({
-          model,
+          model: normalizeModel(model),
           messages: [{ role: "system", content: decisionSystem }, ...history],
           stream: false,
           max_tokens: 800,
@@ -652,7 +652,7 @@ router.post("/ai/chat", async (req, res) => {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({
-        model,
+        model: normalizeModel(model),
         stream: true,
         messages: chatMessages,
         max_tokens: 700,
@@ -759,7 +759,7 @@ router.post("/ai/complete", async (req, res) => {
     const r = await fetch(llmFetchUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
-      body: JSON.stringify({ model, messages, max_tokens: 512 }),
+      body: JSON.stringify({ model: normalizeModel(model), messages, max_tokens: 512 }),
     });
     if (!r.ok) {
       const errText = (await r.text()).slice(0, 200);

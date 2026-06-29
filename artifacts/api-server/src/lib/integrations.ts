@@ -149,12 +149,13 @@ export function heliconeEnabled(): boolean {
  * Helicone sits in FRONT of NVIDIA when configured so every call is logged.
  */
 export function llmBaseUrl(): string {
-  // Operator debug 2026-06-27: log the actual key count at call time so
-  // we can correlate with the nvidia-debug endpoint.
+  // Operator directive 2026-06-29: Kimi.com is PRIMARY when sk-kimi-* key is set.
+  if (kimiPrimary()) {
+    return (process.env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1").replace(/\/$/, "");
+  }
   const keyCount = nvidiaKeys().length;
-  logger.warn({ keyCount, helicone: heliconeEnabled(), hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmBaseUrl called");
   if (!nvidiaConfigured()) {
-    throw new Error("LLM not configured: NVIDIA_API_KEY must be set (OpenRouter removed 2026-06-27) — keyCount=" + keyCount);
+    throw new Error("LLM not configured: no NVIDIA_API_KEY and no KIMI_API_KEY — keyCount=" + keyCount);
   }
   if (heliconeEnabled()) {
     return (process.env["HELICONE_BASE_URL"] ?? "https://nvidia.helicone.ai/v1").replace(/\/$/, "");
@@ -168,6 +169,14 @@ export function llmBaseUrl(): string {
  * providers). Throws a descriptive error when neither key is set.
  */
 export function llmHeaders(extra?: Record<string, string>): Record<string, string> {
+  // Kimi.com primary: use KIMI_API_KEY directly (no NVIDIA pool, no Helicone proxy).
+  if (kimiPrimary()) {
+    return {
+      "Authorization": `Bearer ${process.env["KIMI_API_KEY"]}`,
+      "Content-Type": "application/json",
+      ...extra,
+    };
+  }
   const nvidiaKey = nextNvidiaKey();
   if (nvidiaKey) {
     return {
@@ -177,10 +186,9 @@ export function llmHeaders(extra?: Record<string, string>): Record<string, strin
       ...extra,
     };
   }
-  // NVIDIA-only: fail fast if pool is empty. OpenRouter removed 2026-06-27.
   const keyCount = nvidiaKeys().length;
-  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no NVIDIA key available");
-  throw new Error("LLM not configured: NVIDIA_API_KEY must be set (OpenRouter removed 2026-06-27) — keyCount=" + keyCount);
+  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no key available");
+  throw new Error("LLM not configured: no KIMI_API_KEY and no NVIDIA_API_KEY — keyCount=" + keyCount);
 }
 
 /**
@@ -383,15 +391,37 @@ export function traceLlmRun(trace: LlmTrace): void {
  * Shared by orchestrator.ts and lib/hermes/llm.ts so both code paths incur
  * the same routing, headers, and tracing.
  */
-/** Fallback model when primary hits 402/429. Nvidia-direct, no OpenRouter. */
+/** NVIDIA fallback model when primary model fails. */
 const FALLBACK_MODEL = "meta/llama-3.1-70b-instruct";
 
-/** Tertiary fallback: Kimi.com's hosted Moonshot Kimi K2.6 endpoint. */
+/** Kimi.com fallback model name (used when Kimi is tertiary/secondary). */
 const KIMI_FALLBACK_MODEL = "moonshot-v1-128k";
 
-/** Returns true if a Kimi.com API key is configured. */
+/** Returns true if a Kimi.com API key (sk-kimi-*) is configured. */
 export function kimiApiConfigured(): boolean {
   return !!process.env["KIMI_API_KEY"];
+}
+
+/**
+ * Returns true when the Kimi.com API is the PRIMARY LLM provider.
+ * Operator directive 2026-06-29: when KIMI_API_KEY starts with "sk-kimi-",
+ * route ALL LLM calls to api.moonshot.cn first; fall back to NVIDIA on failure.
+ */
+export function kimiPrimary(): boolean {
+  return (process.env["KIMI_API_KEY"] ?? "").startsWith("sk-kimi-");
+}
+
+/**
+ * Map any model identifier to the correct name for the current LLM provider.
+ * NVIDIA uses slugs like "moonshotai/kimi-k2.6"; Kimi.com uses "kimi-k2".
+ * Non-Kimi models (llama, qwen, etc.) fall back to kimi-k2 on Kimi endpoint.
+ */
+export function normalizeModel(model: string): string {
+  if (!kimiPrimary()) return model;
+  const kimiModel = process.env["KIMI_MODEL"] ?? "kimi-k2";
+  if (model.startsWith("moonshot-") || model.startsWith("kimi-")) return model;
+  if (model.startsWith("moonshotai/")) return kimiModel;
+  return kimiModel;
 }
 
 /** Build the Kimi.com chat-completions URL (OpenAI-compatible Moonshot API). */
@@ -411,7 +441,7 @@ export async function completeChat(
   // different key, and backoff gives the per-minute rate-limit window time
   // to roll over.
   const makeBody = (m: string) => JSON.stringify({
-    model: m,
+    model: normalizeModel(m),
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
@@ -512,18 +542,32 @@ export async function completeChat(
     }
   }
 
-  // ── Outer loop: primary model → llama-3.1-70b → Kimi.com ──
+  // ── Outer loop: Kimi.com primary OR NVIDIA primary → fallback ──
+  if (kimiPrimary()) {
+    // Kimi.com is primary. Try Kimi first, then fall through to NVIDIA llama.
+    const kimiResult = await tryKimi(normalizeModel(model));
+    if (kimiResult !== null) return kimiResult;
+
+    // Kimi failed — fall back to NVIDIA llama if keys are available
+    if (keys.length > 0) {
+      logger.warn({ model, fallback: FALLBACK_MODEL }, "llm: Kimi.com failed, falling back to NVIDIA llama");
+      const fallbackResult = await tryModel(FALLBACK_MODEL);
+      if (fallbackResult !== null) return `[running on ${FALLBACK_MODEL} via nvidia fallback]\n\n${fallbackResult}`;
+    }
+    throw new Error("LLM: Kimi.com primary failed and NVIDIA fallback exhausted");
+  }
+
+  // NVIDIA primary path
   const primaryResult = await tryModel(model);
   if (primaryResult !== null) return primaryResult;
 
-  // Primary model exhausted all keys or returned 402 — try NVIDIA llama fallback
   if (model !== FALLBACK_MODEL) {
     logger.warn({ model, fallback: FALLBACK_MODEL }, "llm: primary model failed, trying llama fallback");
     const fallbackResult = await tryModel(FALLBACK_MODEL);
     if (fallbackResult !== null) return `[running on ${FALLBACK_MODEL} fallback]\n\n${fallbackResult}`;
   }
 
-  // Both NVIDIA attempts exhausted — try Kimi.com as last resort (OPTION).
+  // Both NVIDIA attempts exhausted — try Kimi.com as last resort.
   if (kimiApiConfigured()) {
     logger.warn({ model, kimi: KIMI_FALLBACK_MODEL }, "llm: NVIDIA primary + fallback failed, trying kimi.com");
     const kimiResult = await tryKimi(KIMI_FALLBACK_MODEL);
