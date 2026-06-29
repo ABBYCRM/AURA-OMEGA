@@ -55,7 +55,7 @@ export function nvidiaKeys(): string[] {
   };
   add(process.env["NVIDIA_API_KEY"]);
   add(process.env["NVIDIA_API_KEYS"]);
-  for (let i = 2; i <= 12; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
+  for (let i = 2; i <= 50; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
   return out;
 }
 
