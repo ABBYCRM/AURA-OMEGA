@@ -544,15 +544,35 @@ export async function completeChat(
 
   // ── Outer loop: Kimi.com primary OR NVIDIA primary → fallback ──
   if (kimiPrimary()) {
-    // Kimi.com is primary. Try Kimi first, then fall through to NVIDIA llama.
+    // Kimi.com is primary. Try Kimi first, then directly attempt NVIDIA llama fallback.
     const kimiResult = await tryKimi(normalizeModel(model));
     if (kimiResult !== null) return kimiResult;
 
-    // Kimi failed — fall back to NVIDIA llama if keys are available
+    // Kimi failed — call NVIDIA directly (bypass kimiPrimary routing in llmHeaders/llmBaseUrl).
     if (keys.length > 0) {
       logger.warn({ model, fallback: FALLBACK_MODEL }, "llm: Kimi.com failed, falling back to NVIDIA llama");
-      const fallbackResult = await tryModel(FALLBACK_MODEL);
-      if (fallbackResult !== null) return `[running on ${FALLBACK_MODEL} via nvidia fallback]\n\n${fallbackResult}`;
+      const nvidiaUrl = (process.env["NVIDIA_BASE_URL"] ?? NVIDIA_BASE_DEFAULT) + "/chat/completions";
+      const nvidiaKey = nextNvidiaKey();
+      if (nvidiaKey) {
+        try {
+          const r = await fetch(nvidiaUrl, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${nvidiaKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: FALLBACK_MODEL,
+              messages: [{ role: "system", content: system }, { role: "user", content: user }],
+              stream: false,
+              max_tokens: maxTokens,
+            }),
+            signal: AbortSignal.timeout(60_000),
+          });
+          if (r.ok) {
+            const data = (await r.json()) as { choices?: Array<{ message?: { content?: string } }> };
+            const text = data?.choices?.[0]?.message?.content?.trim();
+            if (text) return `[running on ${FALLBACK_MODEL} via nvidia fallback]\n\n${text}`;
+          }
+        } catch { /* pass through */ }
+      }
     }
     throw new Error("LLM: Kimi.com primary failed and NVIDIA fallback exhausted");
   }
@@ -1103,7 +1123,7 @@ export function integrationStatus(): IntegrationStatus[] {
   const has = (k: string) => !!process.env[k];
   return [
     { key: "nvidia", name: `NVIDIA NIM (${nvidiaKeys().length} key${nvidiaKeys().length === 1 ? "" : "s"})`, category: "llm", envVar: "NVIDIA_API_KEY", configured: nvidiaConfigured() },
-    { key: "kimi", name: "Kimi.com (Moonshot) — OPTION fallback", category: "llm", envVar: "KIMI_API_KEY", configured: kimiApiConfigured() },
+    { key: "kimi", name: `Kimi.com (Moonshot) — ${kimiPrimary() ? "PRIMARY" : "fallback"}`, category: "llm", envVar: "KIMI_API_KEY", configured: kimiApiConfigured() },
     { key: "scrapingbee", name: "ScrapingBee Residential Proxy (IP rotation)", category: "proxy", envVar: "SCRAPINGBEE_API_KEY", configured: has("SCRAPINGBEE_API_KEY") },
     // OpenRouter removed 2026-06-27 — NVIDIA-only stack now.
     { key: "helicone", name: "Helicone", category: "observability", envVar: "HELICONE_API_KEY", configured: has("HELICONE_API_KEY") },

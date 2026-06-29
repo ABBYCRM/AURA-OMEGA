@@ -9,6 +9,7 @@ import { rm } from "node:fs/promises";
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(artifactDir, "..", "..");
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
@@ -22,6 +23,14 @@ async function buildAll() {
     outdir: distDir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
+    // Map @workspace/* packages directly to source files so esbuild can bundle
+    // them without needing pnpm symlinks (package.json exports point to .ts files).
+    alias: {
+      "@workspace/remote-control": path.resolve(repoRoot, "packages/remote-control/src/index.ts"),
+      "@workspace/remote-control/routes": path.resolve(repoRoot, "packages/remote-control/src/routes.ts"),
+      "@workspace/remote-control/adapters": path.resolve(repoRoot, "packages/remote-control/src/adapters/index.ts"),
+      "@workspace/pc-agent": path.resolve(repoRoot, "packages/pc-agent/src/index.ts"),
+    },
     // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
     // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
     // Examples of unbundleable packages:
@@ -98,9 +107,6 @@ async function buildAll() {
       "zeromq-prebuilt",
       "playwright",
       "puppeteer",
-      "@workspace/remote-control",
-      "@workspace/remote-control/routes",
-      "@workspace/pc-agent",
       "puppeteer-core",
       "electron",
     ],
