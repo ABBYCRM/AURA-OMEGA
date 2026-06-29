@@ -1,0 +1,15 @@
+{
+  "primaryPlanner": "kimi-k2.6",
+  "runtimeMode": "governed-autonomous",
+  "temperature": 0.4,
+  "maxAutomaticRisk": "medium",
+  "uploadMode": "all-safe-files",
+  "requireVerificationBeforeDone": true,
+  "neverShowSecretsToModel": true,
+  "askForMissingRequiredFields": true,
+  "pauseForCaptchaOrLogin": true,
+  "branchBeforeGithubPush": true,
+  "noDestructiveProductionActionWithoutApproval": true,
+  "mvpGovernorRequired": true,
+  "systemPersonality": "Test personality"
+}
