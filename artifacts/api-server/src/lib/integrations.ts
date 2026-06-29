@@ -149,13 +149,10 @@ export function heliconeEnabled(): boolean {
  * Helicone sits in FRONT of NVIDIA when configured so every call is logged.
  */
 export function llmBaseUrl(): string {
-  // Operator directive 2026-06-29: Kimi.com is PRIMARY when sk-kimi-* key is set.
-  if (kimiPrimary()) {
-    return (process.env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1").replace(/\/$/, "");
-  }
+  // NVIDIA NIM is PRIMARY. Kimi.com is fallback only (used in completeChat() tertiary path).
   const keyCount = nvidiaKeys().length;
   if (!nvidiaConfigured()) {
-    throw new Error("LLM not configured: no NVIDIA_API_KEY and no KIMI_API_KEY — keyCount=" + keyCount);
+    throw new Error("LLM not configured: NVIDIA_API_KEY must be set — keyCount=" + keyCount);
   }
   if (heliconeEnabled()) {
     return (process.env["HELICONE_BASE_URL"] ?? "https://nvidia.helicone.ai/v1").replace(/\/$/, "");
@@ -169,14 +166,7 @@ export function llmBaseUrl(): string {
  * providers). Throws a descriptive error when neither key is set.
  */
 export function llmHeaders(extra?: Record<string, string>): Record<string, string> {
-  // Kimi.com primary: use KIMI_API_KEY directly (no NVIDIA pool, no Helicone proxy).
-  if (kimiPrimary()) {
-    return {
-      "Authorization": `Bearer ${process.env["KIMI_API_KEY"]}`,
-      "Content-Type": "application/json",
-      ...extra,
-    };
-  }
+  // NVIDIA NIM is PRIMARY — always use the NVIDIA key pool.
   const nvidiaKey = nextNvidiaKey();
   if (nvidiaKey) {
     return {
@@ -187,8 +177,8 @@ export function llmHeaders(extra?: Record<string, string>): Record<string, strin
     };
   }
   const keyCount = nvidiaKeys().length;
-  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no key available");
-  throw new Error("LLM not configured: no KIMI_API_KEY and no NVIDIA_API_KEY — keyCount=" + keyCount);
+  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no NVIDIA key available");
+  throw new Error("LLM not configured: NVIDIA_API_KEY must be set — keyCount=" + keyCount);
 }
 
 /**
@@ -542,42 +532,7 @@ export async function completeChat(
     }
   }
 
-  // ── Outer loop: Kimi.com primary OR NVIDIA primary → fallback ──
-  if (kimiPrimary()) {
-    // Kimi.com is primary. Try Kimi first, then directly attempt NVIDIA llama fallback.
-    const kimiResult = await tryKimi(normalizeModel(model));
-    if (kimiResult !== null) return kimiResult;
-
-    // Kimi failed — call NVIDIA directly (bypass kimiPrimary routing in llmHeaders/llmBaseUrl).
-    if (keys.length > 0) {
-      logger.warn({ model, fallback: FALLBACK_MODEL }, "llm: Kimi.com failed, falling back to NVIDIA llama");
-      const nvidiaUrl = (process.env["NVIDIA_BASE_URL"] ?? NVIDIA_BASE_DEFAULT) + "/chat/completions";
-      const nvidiaKey = nextNvidiaKey();
-      if (nvidiaKey) {
-        try {
-          const r = await fetch(nvidiaUrl, {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${nvidiaKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: FALLBACK_MODEL,
-              messages: [{ role: "system", content: system }, { role: "user", content: user }],
-              stream: false,
-              max_tokens: maxTokens,
-            }),
-            signal: AbortSignal.timeout(60_000),
-          });
-          if (r.ok) {
-            const data = (await r.json()) as { choices?: Array<{ message?: { content?: string } }> };
-            const text = data?.choices?.[0]?.message?.content?.trim();
-            if (text) return `[running on ${FALLBACK_MODEL} via nvidia fallback]\n\n${text}`;
-          }
-        } catch { /* pass through */ }
-      }
-    }
-    throw new Error("LLM: Kimi.com primary failed and NVIDIA fallback exhausted");
-  }
-
-  // NVIDIA primary path
+  // ── NVIDIA primary → llama fallback → Kimi.com tertiary ──
   const primaryResult = await tryModel(model);
   if (primaryResult !== null) return primaryResult;
 
@@ -596,7 +551,7 @@ export async function completeChat(
     }
   }
 
-  throw new Error("LLM: no key configured or all attempts exhausted (primary + llama fallback + kimi.com option)");
+  throw new Error("LLM: no key configured or all attempts exhausted (nvidia primary + llama fallback + kimi.com option)");
 }
 
 // ─── E2B (cloud code-interpreter sandbox) ────────────────────────────────────

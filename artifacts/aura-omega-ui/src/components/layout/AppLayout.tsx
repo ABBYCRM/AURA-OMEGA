@@ -291,7 +291,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
 }
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const [heartbeat, setHeartbeat] = useState<"online" | "offline" | "unknown">("unknown");
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
