@@ -16,6 +16,38 @@ what was changed, when, and why. Every future AI working on this codebase should
 
 ---
 
+## 2026-06-29 — New Tools: Jina, Perplexity, Resend, ElevenLabs, Fal.ai, HeyGen, Apify, Twilio
+
+**Author:** Claude Sonnet 4.6 (claude/github-render-deployment-2pxepk)
+**Type:** `[INFRA]`
+
+### What was added
+
+8 new tools added to `TOOL_REGISTRY` in `tools.ts` and wired into AGENT_TOOLS permissions:
+
+| Tool | Provider | Purpose | Key Required |
+|------|----------|---------|-------------|
+| `jina_read` | Jina AI | Extract clean markdown from any URL | None (free) |
+| `deep_research` | Perplexity Sonar | Deep multi-source research with citations | `PERPLEXITY_API_KEY` |
+| `send_email` | Resend | Transactional email (HTML/text) | `RESEND_API_KEY`, `RESEND_FROM` |
+| `text_to_speech` | ElevenLabs | Text → MP3 audio, saves as attachment | `ELEVENLABS_API_KEY` |
+| `video_generate` | Fal.ai | Text/image → video (Veo 3, Kling, Wan, etc.) | `FAL_KEY` |
+| `avatar_video` | HeyGen | AI talking-avatar video from script | `HEYGEN_API_KEY` |
+| `apify_run` | Apify | 30,000+ web scrapers (LinkedIn, TikTok, etc.) | `APIFY_TOKEN` |
+| `send_sms` | Twilio | SMS + WhatsApp messaging | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` |
+
+**AGENT_TOOLS changes:**
+- `jina_read` → AURAs 1–5 (all agents)
+- `deep_research` → AURAs 2–5 (browser, memory, APIs, social)
+- `send_email`, `send_sms` → AURAs 4–5 (APIs + social)
+- `text_to_speech`, `video_generate`, `avatar_video` → AURA-4 (APIs)
+- `apify_run` → AURAs 2, 4, 5 (browser, APIs, social)
+
+**Env vars to add in Render** (none go in the repo):
+`PERPLEXITY_API_KEY`, `RESEND_API_KEY`, `RESEND_FROM`, `ELEVENLABS_API_KEY`, `FAL_KEY`, `HEYGEN_API_KEY`, `APIFY_TOKEN`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
+
+---
+
 ## 2026-06-29 — Proto-AGI Build: Features 1, 2, 3
 
 **Author:** Claude Sonnet 4.6 (claude/github-render-deployment-2pxepk)

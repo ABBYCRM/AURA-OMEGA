@@ -1575,6 +1575,364 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
       return row ? `cancelled scheduled job #${id} ("${row.name}").` : `no scheduled job #${id} found.`;
     },
   },
+
+  jina_read: {
+    name: "jina_read",
+    description: "Read any URL as clean markdown using Jina AI Reader. Free, no API key required. Ideal for articles, docs, and web pages where you just need readable text without JavaScript rendering. Prefer over web_scrape when clean extraction is the goal.",
+    parameters: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The URL to read." },
+      },
+      required: ["url"],
+    },
+    run: async (args) => {
+      const url = String(args["url"] ?? "").trim();
+      if (!url) return "error: url is required.";
+      try {
+        const target = `https://r.jina.ai/${url}`;
+        const res = await fetch(target, {
+          headers: { Accept: "text/plain,text/markdown", "X-Return-Format": "markdown" },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) return `error: Jina returned ${res.status}: ${(await res.text()).slice(0, 200)}`;
+        const text = await res.text();
+        return text.slice(0, 12_000);
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  deep_research: {
+    name: "deep_research",
+    description: "Deep multi-source research using Perplexity Sonar. Searches the live web with citations and synthesizes multiple sources into a detailed answer. Best for complex questions requiring up-to-date information. Requires PERPLEXITY_API_KEY.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The research question or topic." },
+        mode: { type: "string", enum: ["sonar", "sonar-pro"], description: "Research depth: 'sonar' (fast) or 'sonar-pro' (thorough deep research). Default: sonar." },
+      },
+      required: ["query"],
+    },
+    run: async (args) => {
+      const key = process.env["PERPLEXITY_API_KEY"];
+      if (!key) return "error: PERPLEXITY_API_KEY is not set — add it to Render environment variables.";
+      const query = String(args["query"] ?? "").trim();
+      if (!query) return "error: query is required.";
+      const model = String(args["mode"] ?? "sonar") === "sonar-pro" ? "sonar-pro" : "sonar";
+      try {
+        const res = await fetch("https://api.perplexity.ai/chat/completions", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, messages: [{ role: "user", content: query }], max_tokens: 2000 }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!res.ok) return `error: Perplexity ${res.status}: ${(await res.text()).slice(0, 300)}`;
+        const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }>; citations?: string[] };
+        const content = data?.choices?.[0]?.message?.content ?? "";
+        const citations = Array.isArray(data?.citations) ? data.citations : [];
+        const citationBlock = citations.length > 0 ? `\n\nSources:\n${citations.map((c, i) => `[${i + 1}] ${c}`).join("\n")}` : "";
+        return (content + citationBlock).slice(0, 12_000);
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  send_email: {
+    name: "send_email",
+    description: "Send a transactional email using Resend. Supports HTML and plain text. Use for reports, notifications, or deliverables to the operator. Requires RESEND_API_KEY and RESEND_FROM (verified sender address).",
+    parameters: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient email address." },
+        subject: { type: "string", description: "Email subject line." },
+        body: { type: "string", description: "Email body — plain text or HTML." },
+        html: { type: "boolean", description: "Set true if body is HTML (default false)." },
+        from: { type: "string", description: "Sender address. Defaults to RESEND_FROM env var." },
+      },
+      required: ["to", "subject", "body"],
+    },
+    run: async (args) => {
+      const key = process.env["RESEND_API_KEY"];
+      if (!key) return "error: RESEND_API_KEY is not set — add it to Render environment variables.";
+      const to = String(args["to"] ?? "").trim();
+      const subject = String(args["subject"] ?? "").trim();
+      const body = String(args["body"] ?? "").trim();
+      if (!to || !subject || !body) return "error: to, subject, and body are required.";
+      const from = String(args["from"] ?? process.env["RESEND_FROM"] ?? "AURA <noreply@notifications.abbycrm.com>").trim();
+      const isHtml = args["html"] === true || String(args["html"]) === "true";
+      try {
+        const payload: Record<string, unknown> = { from, to, subject };
+        if (isHtml) { payload["html"] = body; } else { payload["text"] = body; }
+        const res = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) return `error: Resend ${res.status}: ${(await res.text()).slice(0, 300)}`;
+        const data = (await res.json()) as { id?: string };
+        return `email sent to ${to} — Resend ID: ${data?.id ?? "unknown"}`;
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  text_to_speech: {
+    name: "text_to_speech",
+    description: "Convert text to speech MP3 using ElevenLabs (~75ms latency). Saves the audio as a downloadable attachment and returns the URL. Requires ELEVENLABS_API_KEY.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Text to convert (max 5000 characters)." },
+        voice_id: { type: "string", description: "ElevenLabs voice ID. Default: Rachel (21m00Tcm4TlvDq8ikWAM). Browse at elevenlabs.io/voice-lab." },
+        model: { type: "string", description: "'eleven_monolingual_v1' (default), 'eleven_multilingual_v2' (non-English), 'eleven_turbo_v2' (fastest)." },
+        stability: { type: "number", description: "Voice stability 0–1 (default 0.5)." },
+        similarity_boost: { type: "number", description: "Similarity boost 0–1 (default 0.75)." },
+      },
+      required: ["text"],
+    },
+    run: async (args) => {
+      const key = process.env["ELEVENLABS_API_KEY"];
+      if (!key) return "error: ELEVENLABS_API_KEY is not set — add it to Render environment variables.";
+      const text = String(args["text"] ?? "").trim().slice(0, 5000);
+      if (!text) return "error: text is required.";
+      const voiceId = String(args["voice_id"] ?? "21m00Tcm4TlvDq8ikWAM");
+      const model = String(args["model"] ?? "eleven_monolingual_v1");
+      const stability = typeof args["stability"] === "number" ? Math.max(0, Math.min(1, args["stability"])) : 0.5;
+      const similarityBoost = typeof args["similarity_boost"] === "number" ? Math.max(0, Math.min(1, args["similarity_boost"])) : 0.75;
+      try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+          method: "POST",
+          headers: { "xi-api-key": key, "Content-Type": "application/json", Accept: "audio/mpeg" },
+          body: JSON.stringify({ text, model_id: model, voice_settings: { stability, similarity_boost: similarityBoost } }),
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (!res.ok) return `error: ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}`;
+        const buf = Buffer.from(await res.arrayBuffer());
+        const base64 = buf.toString("base64");
+        const [row] = await db.insert(attachmentsTable).values({
+          filename: `speech-${Date.now()}.mp3`,
+          mimeType: "audio/mpeg",
+          kind: "other",
+          sizeBytes: buf.length,
+          data: base64,
+          extractedText: text.slice(0, 500),
+        }).returning();
+        const url = uploadUrl(row.id, true);
+        return `audio ready (${Math.round(buf.length / 1024)} KB) — [Download MP3](${url})`;
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  video_generate: {
+    name: "video_generate",
+    description: "Generate AI videos from text prompts or images using Fal.ai (Veo 3, Kling 3.0, Wan, and 1000+ models). Submits an async job and polls for completion. Returns the video URL. Requires FAL_KEY.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "Text prompt describing the video to generate." },
+        model: { type: "string", description: "Fal model ID. Examples: 'fal-ai/kling-video/v1.6/standard/text-to-video' (default), 'fal-ai/veo3' (Google Veo 3), 'fal-ai/wan-t2v-1.3b' (fast/cheap)." },
+        duration: { type: "string", description: "Duration in seconds (model-dependent, default '5')." },
+        aspect_ratio: { type: "string", description: "Aspect ratio: '16:9' (default), '9:16', '1:1'." },
+        image_url: { type: "string", description: "Optional: image URL to use as the first frame (image-to-video mode)." },
+      },
+      required: ["prompt"],
+    },
+    run: async (args) => {
+      const key = process.env["FAL_KEY"];
+      if (!key) return "error: FAL_KEY is not set — add it to Render environment variables.";
+      const prompt = String(args["prompt"] ?? "").trim();
+      if (!prompt) return "error: prompt is required.";
+      const model = String(args["model"] ?? "fal-ai/kling-video/v1.6/standard/text-to-video");
+      const duration = String(args["duration"] ?? "5");
+      const aspectRatio = String(args["aspect_ratio"] ?? "16:9");
+      const imageUrl = args["image_url"] ? String(args["image_url"]) : undefined;
+      try {
+        const submitBody: Record<string, unknown> = { prompt, duration, aspect_ratio: aspectRatio };
+        if (imageUrl) submitBody["image_url"] = imageUrl;
+        const submitRes = await fetch(`https://queue.fal.run/${model}`, {
+          method: "POST",
+          headers: { Authorization: `Key ${key}`, "Content-Type": "application/json" },
+          body: JSON.stringify(submitBody),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!submitRes.ok) return `error: Fal submit ${submitRes.status}: ${(await submitRes.text()).slice(0, 300)}`;
+        const submitted = (await submitRes.json()) as { request_id?: string };
+        const requestId = submitted?.request_id;
+        if (!requestId) return `error: Fal did not return a request_id. Response: ${JSON.stringify(submitted).slice(0, 300)}`;
+
+        const statusUrl = `https://queue.fal.run/${model}/requests/${requestId}/status`;
+        const resultUrl = `https://queue.fal.run/${model}/requests/${requestId}`;
+        const deadline = Date.now() + 5 * 60 * 1000;
+        let pollInterval = 5_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, pollInterval));
+          pollInterval = Math.min(pollInterval * 1.5, 20_000);
+          const statusRes = await fetch(statusUrl, { headers: { Authorization: `Key ${key}` }, signal: AbortSignal.timeout(10_000) });
+          if (!statusRes.ok) continue;
+          const status = (await statusRes.json()) as { status?: string };
+          if (status?.status === "COMPLETED") {
+            const resultRes = await fetch(resultUrl, { headers: { Authorization: `Key ${key}` }, signal: AbortSignal.timeout(10_000) });
+            if (!resultRes.ok) return `error: Fal result ${resultRes.status}`;
+            const result = (await resultRes.json()) as { video?: { url?: string }; url?: string };
+            const videoUrl = result?.video?.url ?? (result as Record<string, unknown>)?.["url"] as string ?? "";
+            if (!videoUrl) return `generation completed but no video URL found. Response: ${JSON.stringify(result).slice(0, 400)}`;
+            return `video generated: ${videoUrl}`;
+          }
+          if (status?.status === "FAILED") return `video generation failed (Fal request_id: ${requestId})`;
+        }
+        return `video generation timed out after 5 minutes. Fal request_id: ${requestId}`;
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  avatar_video: {
+    name: "avatar_video",
+    description: "Generate an AI talking-avatar video using HeyGen. Provide an avatar ID, a voice ID, and a script — HeyGen renders the avatar speaking your text. Async, typically 1–3 minutes. Returns a video URL. Requires HEYGEN_API_KEY.",
+    parameters: {
+      type: "object",
+      properties: {
+        script: { type: "string", description: "The text the avatar will speak (max 1500 characters)." },
+        avatar_id: { type: "string", description: "HeyGen avatar ID (e.g. 'Daisy-inskirt-20220818'). Browse at app.heygen.com." },
+        voice_id: { type: "string", description: "HeyGen voice ID (e.g. 'en-US-GuyNeural'). Browse in HeyGen voice library." },
+        width: { type: "number", description: "Video width in pixels (default 1280)." },
+        height: { type: "number", description: "Video height in pixels (default 720)." },
+      },
+      required: ["script", "avatar_id", "voice_id"],
+    },
+    run: async (args) => {
+      const key = process.env["HEYGEN_API_KEY"];
+      if (!key) return "error: HEYGEN_API_KEY is not set — add it to Render environment variables.";
+      const script = String(args["script"] ?? "").trim().slice(0, 1500);
+      const avatarId = String(args["avatar_id"] ?? "").trim();
+      const voiceId = String(args["voice_id"] ?? "").trim();
+      if (!script || !avatarId || !voiceId) return "error: script, avatar_id, and voice_id are required.";
+      const width = typeof args["width"] === "number" ? args["width"] : 1280;
+      const height = typeof args["height"] === "number" ? args["height"] : 720;
+      try {
+        const submitRes = await fetch("https://api.heygen.com/v2/video/generate", {
+          method: "POST",
+          headers: { "X-Api-Key": key, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_inputs: [{ character: { type: "avatar", avatar_id: avatarId, avatar_style: "normal" }, voice: { type: "text", input_text: script, voice_id: voiceId } }],
+            dimension: { width, height },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!submitRes.ok) return `error: HeyGen submit ${submitRes.status}: ${(await submitRes.text()).slice(0, 300)}`;
+        const submitted = (await submitRes.json()) as { data?: { video_id?: string } };
+        const videoId = submitted?.data?.video_id;
+        if (!videoId) return `error: HeyGen did not return a video_id. Response: ${JSON.stringify(submitted).slice(0, 300)}`;
+
+        const deadline = Date.now() + 5 * 60 * 1000;
+        let pollInterval = 10_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, pollInterval));
+          pollInterval = Math.min(pollInterval * 1.3, 30_000);
+          const statusRes = await fetch(`https://api.heygen.com/v1/video_status.get?video_id=${videoId}`, {
+            headers: { "X-Api-Key": key },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!statusRes.ok) continue;
+          const status = (await statusRes.json()) as { data?: { status?: string; video_url?: string; error?: string } };
+          const vs = status?.data?.status;
+          if (vs === "completed") {
+            const url = status?.data?.video_url ?? "";
+            return url ? `avatar video ready: ${url}` : `video completed but no URL returned. video_id: ${videoId}`;
+          }
+          if (vs === "failed") return `avatar video generation failed: ${status?.data?.error ?? "unknown error"}`;
+        }
+        return `avatar video timed out after 5 minutes. HeyGen video_id: ${videoId}`;
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  apify_run: {
+    name: "apify_run",
+    description: "Run any Apify actor (pre-built web scraper) to extract data from LinkedIn, Instagram, TikTok, Google Maps, Amazon, and 30,000+ sites. Returns the scraped dataset as JSON. Requires APIFY_TOKEN.",
+    parameters: {
+      type: "object",
+      properties: {
+        actor_id: { type: "string", description: "Apify actor ID. Examples: 'apify/instagram-scraper', 'apify/linkedin-profile-scraper', 'apify/google-maps-scraper', 'apify/tiktok-scraper'. Browse at apify.com/store." },
+        input: { type: "object", description: "Actor input parameters (varies per actor — check the actor's input schema page).", additionalProperties: true },
+        max_items: { type: "number", description: "Max results to return (default 20, max 100)." },
+      },
+      required: ["actor_id", "input"],
+    },
+    run: async (args) => {
+      const token = process.env["APIFY_TOKEN"];
+      if (!token) return "error: APIFY_TOKEN is not set — add it to Render environment variables.";
+      const actorId = String(args["actor_id"] ?? "").trim();
+      if (!actorId) return "error: actor_id is required.";
+      const input = (typeof args["input"] === "object" && args["input"] !== null) ? args["input"] : {};
+      const maxItems = Math.min(typeof args["max_items"] === "number" ? args["max_items"] : 20, 100);
+      try {
+        const runRes = await fetch(`https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${token}&maxItems=${maxItems}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+          signal: AbortSignal.timeout(5 * 60 * 1000),
+        });
+        if (!runRes.ok) return `error: Apify ${runRes.status}: ${(await runRes.text()).slice(0, 300)}`;
+        const items = (await runRes.json()) as unknown[];
+        if (!Array.isArray(items) || items.length === 0) return "Apify actor returned no results.";
+        return JSON.stringify(items, null, 2).slice(0, 12_000);
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
+
+  send_sms: {
+    name: "send_sms",
+    description: "Send an SMS or WhatsApp message using Twilio. For SMS use a plain E.164 number ('+15551234567'). For WhatsApp prefix with 'whatsapp:' ('whatsapp:+15551234567'). Requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER.",
+    parameters: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient phone number in E.164 format or 'whatsapp:+...' for WhatsApp." },
+        message: { type: "string", description: "Message text (max 1600 characters for SMS)." },
+      },
+      required: ["to", "message"],
+    },
+    run: async (args) => {
+      const sid = process.env["TWILIO_ACCOUNT_SID"];
+      const token = process.env["TWILIO_AUTH_TOKEN"];
+      const from = process.env["TWILIO_FROM_NUMBER"];
+      if (!sid || !token) return "error: TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN are required — add them to Render environment variables.";
+      if (!from) return "error: TWILIO_FROM_NUMBER is not set — add it to Render environment variables.";
+      const to = String(args["to"] ?? "").trim();
+      const message = String(args["message"] ?? "").trim().slice(0, 1600);
+      if (!to || !message) return "error: to and message are required.";
+      try {
+        const body = new URLSearchParams({ To: to, From: from, Body: message });
+        const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString("base64")}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: body.toString(),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) return `error: Twilio ${res.status}: ${(await res.text()).slice(0, 300)}`;
+        const data = (await res.json()) as { sid?: string; status?: string; error_message?: string };
+        if (data?.error_message) return `error: Twilio rejected: ${data.error_message}`;
+        return `SMS sent to ${to} — Twilio SID: ${data?.sid ?? "unknown"}, status: ${data?.status ?? "unknown"}`;
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
 };
 
 // ─── Per-agent tool permissions ──────────────────────────────────────────────
@@ -1585,11 +1943,11 @@ const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
 
 export const AGENT_TOOLS: Record<number, string[]> = {
   1: ALL_TOOLS, // ABBY — full authority
-  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-1 — code
-  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-2 — browser
-  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-3 — memory/RAG
-  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-4 — APIs + scheduling
-  6: ["web_scrape", "web_search", "tier1_sources", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-5 — social
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-1 — code
+  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "jina_read", "deep_research", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "apify_run", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-2 — browser
+  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "jina_read", "deep_research", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-3 — memory/RAG
+  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "send_email", "text_to_speech", "video_generate", "avatar_video", "apify_run", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-4 — APIs + scheduling
+  6: ["web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "send_email", "send_sms", "apify_run", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-5 — social
 };
 
 export function getToolNamesForAgent(agentId: number): string[] {
