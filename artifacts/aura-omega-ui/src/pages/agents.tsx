@@ -41,68 +41,74 @@ export default function Agents() {
             <div className="text-xs text-muted-foreground/60 max-w-sm">The swarm seeds six AURA agents on first run. If none appear, the server may still be starting up.</div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {agents.map(agent => (
-              <div key={agent.id} className="bg-card border border-border rounded-2xl overflow-hidden group hover:shadow-md hover:border-primary/30 transition-all duration-200">
-                {/* Colored top accent */}
-                <div className="h-1" style={{ backgroundColor: agent.color }} />
-
-                <div className="p-5">
-                  {/* Header row */}
-                  <div className="flex items-center gap-3.5 mb-4">
-                    <div
-                      className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
-                      style={{ backgroundColor: `${agent.color}18`, color: agent.color, border: `1.5px solid ${agent.color}40` }}
-                    >
+              <div key={agent.id} className="bg-card/40 backdrop-blur-sm border border-card-border rounded-xl p-6 relative overflow-hidden group hover:border-primary/50 transition-colors">
+                {/* Accent line top */}
+                <div className="absolute top-0 left-0 right-0 h-1" style={{ backgroundColor: agent.color }}></div>
+                
+                <div className="flex justify-between items-start mb-6">
+                  <div className="flex gap-4 items-center">
+                    <div className="w-12 h-12 rounded-lg flex items-center justify-center font-mono font-bold text-lg"
+                         style={{ backgroundColor: `${agent.color}20`, color: agent.color, border: `1px solid ${agent.color}40` }}>
                       {agent.avatarInitials}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold text-[15px] leading-snug" style={{ color: agent.color }}>{agent.name}</h3>
-                      <div className="flex items-center gap-1.5 mt-0.5">
+                    <div>
+                      <h3 className="font-bold text-lg" style={{ color: agent.color }}>{agent.name}</h3>
+                      <div className="flex items-center gap-2 mt-1">
                         <AgentStatusDot status={agent.status} />
-                        <span className="text-[11px] text-muted-foreground capitalize">{agent.status}</span>
+                        <span className="text-xs uppercase tracking-wider text-muted-foreground font-mono">{agent.status}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-1">Role</div>
+                    <div className="text-sm font-medium">{agent.role}</div>
+                  </div>
+                  
+                  {agent.description && (
+                    <div>
+                      <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-1">Directive</div>
+                      <div className="text-xs text-muted-foreground line-clamp-2">{agent.description}</div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-background/50 p-3 rounded-lg border border-card-border">
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-2">
+                        <Cpu className="w-3 h-3" /> Model
+                      </div>
+                      <div className="text-xs font-mono">{agent.model || 'Unknown'}</div>
+                    </div>
+                    <div className="bg-background/50 p-3 rounded-lg border border-card-border">
+                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-2">
+                        <Activity className="w-3 h-3" /> Context
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="text-xs font-mono">{Math.round((agent.contextUsed / agent.contextMax) * 100)}% Used</div>
+                        <div className="h-1.5 w-full bg-card-border rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-primary" 
+                            style={{ width: `${Math.min(100, (agent.contextUsed / agent.contextMax) * 100)}%` }}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* Role + description */}
-                  <div className="mb-4 space-y-2">
-                    <div className="text-sm font-medium text-foreground">{agent.role}</div>
-                    {agent.description && (
-                      <div className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{agent.description}</div>
-                    )}
-                  </div>
-
-                  {/* Context bar */}
-                  <div className="mb-4">
-                    <div className="flex justify-between text-[11px] text-muted-foreground mb-1.5">
-                      <span>Context</span>
-                      <span>{Math.round((agent.contextUsed / agent.contextMax) * 100)}%</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(100, (agent.contextUsed / agent.contextMax) * 100)}%`, backgroundColor: agent.color }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Model */}
-                  {agent.model && (
-                    <div className="mb-4 flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
-                      <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-[11px] font-mono text-muted-foreground truncate">{agent.model}</span>
-                    </div>
-                  )}
-
-                  {/* Capabilities */}
                   {agent.capabilities && agent.capabilities.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {agent.capabilities.slice(0, 6).map(cap => (
-                        <span key={cap} className="px-2 py-0.5 bg-muted text-muted-foreground text-[10px] rounded-full font-medium">
-                          {cap}
-                        </span>
-                      ))}
+                    <div>
+                      <div className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-2">Capabilities</div>
+                      <div className="flex flex-wrap gap-2">
+                        {agent.capabilities.map(cap => (
+                          <span key={cap} className="px-2 py-1 bg-secondary text-secondary-foreground text-[10px] rounded-md border border-card-border uppercase font-mono">
+                            {cap}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

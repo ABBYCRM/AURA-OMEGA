@@ -529,15 +529,11 @@ export default function ChatPage() {
               <div className="flex gap-3">
                 <Avatar name={ai.agentName ?? "ABBY"} color="#22d3ee" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-semibold text-cyan-500 mb-1">{ai.agentName ?? "ABBY"}</div>
+                  <div className="text-xs text-muted-foreground mb-1">{ai.agentName ?? "ABBY"}</div>
                   {ai.tokens ? (
-                    <div className="chat-bubble-agent px-4 py-3 text-sm leading-relaxed">
-                      <MessageContent content={ai.tokens} />
-                    </div>
+                    <MessageContent content={ai.tokens} />
                   ) : (
-                    <div className="chat-bubble-agent px-4 py-3">
-                      <TypingDots />
-                    </div>
+                    <TypingDots />
                   )}
                 </div>
               </div>
@@ -554,8 +550,8 @@ export default function ChatPage() {
         </div>
 
         {/* Composer */}
-        <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur-sm">
-          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
+        <div className="shrink-0 border-t border-card-border bg-background">
+          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3">
             {uploading && (
               <div className="mb-2 inline-flex items-center gap-2 rounded-lg border border-card-border bg-card px-2.5 py-1.5 text-sm text-muted-foreground">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -575,7 +571,7 @@ export default function ChatPage() {
                 </button>
               </div>
             )}
-            <div className="flex items-end gap-2 rounded-2xl border border-border bg-card shadow-sm px-3 py-2 focus-within:border-primary/60 focus-within:shadow-[0_0_0_3px_rgba(139,92,246,0.10)] transition-all">
+            <div className="flex items-end gap-2 rounded-2xl border border-card-border bg-card px-3 py-2 focus-within:border-primary/50 transition-colors">
               <input ref={fileRef} type="file" className="hidden" onChange={onPickFile} aria-hidden="true" />
               <button
                 onClick={() => fileRef.current?.click()}
@@ -617,8 +613,8 @@ export default function ChatPage() {
                 {ai.streaming ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
               </button>
             </div>
-            <p className="text-[10px] text-muted-foreground/40 text-center mt-2 select-none">
-              UI → BOS Governor → tool router → verified result
+            <p className="text-[11px] text-muted-foreground/60 text-center mt-2">
+              AURA-OMEGA mode: UI → API → BOS Governor → tool router → verified UI response.
             </p>
           </div>
         </div>
@@ -652,22 +648,20 @@ function Avatar({ name, color }: { name: string; color: string }) {
   const initials = name.split(/[\s.]+/).slice(0, 2).map((s) => s[0]).join("").toUpperCase();
   return (
     <div
-      className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-bold shadow-sm"
-      style={{ backgroundColor: `${color}20`, color, border: `1.5px solid ${color}50` }}
+      className="w-8 h-8 rounded-lg shrink-0 flex items-center justify-center text-xs font-bold"
+      style={{ backgroundColor: `${color}22`, color, border: `1px solid ${color}44` }}
     >
       {initials || "AI"}
     </div>
   );
 }
 
-function MessageRow({ message: m }: { message: { messageType: string; content: string; agentName?: string | null; agentColor?: string | null; timestamp?: string } }) {
+function MessageRow({ message: m }: { message: { messageType: string; content: string; agentName?: string | null; agentColor?: string | null } }) {
   if (m.messageType === "user") {
     return (
-      <div className="flex justify-end gap-2 group">
-        <div className="max-w-[88%] sm:max-w-[78%]">
-          <div className="chat-bubble-user px-4 py-3 text-sm leading-relaxed shadow-sm">
-            <MessageContent content={m.content} />
-          </div>
+      <div className="flex justify-end">
+        <div className="max-w-[92%] sm:max-w-[85%] rounded-2xl rounded-br-md bg-primary/15 border border-primary/20 px-3 sm:px-4 py-2.5">
+          <MessageContent content={m.content} />
         </div>
       </div>
     );
@@ -675,33 +669,26 @@ function MessageRow({ message: m }: { message: { messageType: string; content: s
   if (m.messageType === "system") {
     return (
       <div className="flex justify-center">
-        <div className="text-xs text-muted-foreground/70 bg-muted/40 rounded-full px-3 py-1">{m.content}</div>
+        <div className="text-xs text-muted-foreground bg-card/60 border border-card-border rounded-full px-3 py-1">{m.content}</div>
       </div>
     );
   }
   const color = m.agentColor || "#22d3ee";
   const isTool = m.messageType === "tool_output";
   return (
-    <div className="flex gap-3 group">
+    <div className="flex gap-3">
       <Avatar name={m.agentName || "Assistant"} color={color} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-[12px] font-semibold" style={{ color }}>{m.agentName || "Assistant"}</span>
-          {m.timestamp && (
-            <span className="text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
-              {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-        </div>
+        <div className="text-xs text-muted-foreground mb-1">{m.agentName || "Assistant"}</div>
         {isTool ? (
-          <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 font-mono text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">
+          <div className="rounded-lg border border-card-border bg-card/50 px-3 py-2 font-mono text-[13px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">
             {m.content}
           </div>
         ) : (
-          <div className="chat-bubble-agent px-4 py-3 text-sm leading-relaxed">
+          <>
             <MessageContent content={m.content} />
             <MessageActions content={m.content} />
-          </div>
+          </>
         )}
       </div>
     </div>
@@ -791,32 +778,31 @@ function EmptyState({ onNew }: { onNew: () => void }) {
 }
 
 function EmptyConversation({ onPrompt }: { onPrompt: (p: string) => void }) {
-  const suggestions = [
-    { label: "Social post", prompt: "Write + post a lead-gen Instagram post for AI automation, with a real cited stat" },
-    { label: "Email sequence", prompt: "Draft a 7-email nurture sequence (CAN-SPAM compliant) for a real-estate audience" },
-    { label: "Content calendar", prompt: "Build a 30-day social media content calendar for a fitness coaching brand" },
-    { label: "Market research", prompt: "Research the EV market and build a downloadable PDF brief with TAM/SAM/SOM" },
-    { label: "Web scrape", prompt: "Scrape news.ycombinator.com and give me the top 5 stories as a table" },
-    { label: "Image gen", prompt: "Generate an ultra realistic image of a husky in the snow" },
+  const prompts = [
+    "Use the marketing engine to write + post a lead-gen Instagram post for AI automation, with a real cited stat",
+    "Draft a 7-email nurture sequence (CAN-SPAM compliant) for a real-estate audience",
+    "Build a 30-day social media content calendar for a fitness coaching brand",
+    "Generate an ultra realistic image of a husky in the snow",
+    "Research the EV market and build a downloadable PDF brief with TAM/SAM/SOM",
+    "Scrape news.ycombinator.com and give me the top 5 stories as a table",
   ];
   return (
-    <div className="flex flex-col items-center justify-center py-16 text-center gap-6">
-      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/10 border border-primary/20 flex items-center justify-center shadow-lg shadow-primary/10">
-        <Bot className="w-7 h-7 text-primary" />
+    <div className="flex flex-col items-center justify-center py-20 text-center gap-5">
+      <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+        <Bot className="w-6 h-6 text-primary" />
       </div>
-      <div className="space-y-1.5">
-        <h2 className="text-lg font-semibold tracking-tight">What should AURA-OMEGA do?</h2>
-        <p className="text-sm text-muted-foreground max-w-xs">Type a goal or pick one below — the swarm handles the rest.</p>
+      <div>
+        <h2 className="text-base font-semibold">What should AURA-OMEGA do next?</h2>
+        <p className="text-sm text-muted-foreground mt-1">Ask from the UI; Discord remains the transport/source-of-truth in the middle.</p>
       </div>
-      <div className="grid grid-cols-2 gap-2 w-full max-w-sm px-1 sm:px-0">
-        {suggestions.map((s) => (
+      <div className="w-full max-w-md space-y-2 px-1 sm:px-0">
+        {prompts.map((p) => (
           <button
-            key={s.label}
-            onClick={() => onPrompt(s.prompt)}
-            className="text-left rounded-xl border border-border bg-card/70 px-3.5 py-3 hover:border-primary/40 hover:bg-card hover:shadow-sm transition-all group"
+            key={p}
+            onClick={() => onPrompt(p)}
+            className="w-full text-left text-sm rounded-xl border border-card-border bg-card/50 px-4 py-3 hover:border-primary/40 hover:bg-card transition-colors"
           >
-            <div className="text-xs font-semibold text-primary mb-0.5 group-hover:text-primary">{s.label}</div>
-            <div className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2">{s.prompt}</div>
+            {p}
           </button>
         ))}
       </div>

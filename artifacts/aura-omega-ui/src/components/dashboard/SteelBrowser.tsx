@@ -197,7 +197,7 @@ export function SteelBrowser() {
         <div className="flex items-center gap-2 text-[#0066ff]">
           <Globe className="w-4 h-4" />
           <span className="text-sm font-bold uppercase tracking-widest">STEEL BROWSER</span>
-          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-[#0066ff]/30 bg-[#0066ff]/10 text-[#0066ff]/80">AURA-2</span>
+          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-[#0066ff]/30 bg-[#0066ff]/10 text-[#0066ff]/80">CRAWLER</span>
         </div>
         <div className="flex-1" />
         {/* Session pills */}
