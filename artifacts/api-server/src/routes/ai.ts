@@ -244,6 +244,27 @@ export function requestsConnectedAccountAction(message: string): boolean {
   );
 }
 
+/**
+ * True when the operator issues a clear task directive: create, build, research,
+ * analyze, plan, write, implement, develop, design, or otherwise DO something.
+ * These are imperatives that demand swarm execution — the AURAs have tools to
+ * produce real artifacts; inline ABBY can only describe what could be done.
+ * Deterministic catch-all so the LLM router cannot misclassify real tasks as chat.
+ */
+export function requestsTaskExecution(message: string): boolean {
+  // Direct imperative opening — "Build a CRM", "Create an API", "Research X"
+  if (/^(build|create|make|develop|implement|code|write|design|research|analyze|analyse|find|scrape|generate|give me|i need|i want)\s+/i.test(message.trim())) return true;
+  // Explicit creation / development of a software/system artifact
+  if (/\b(create|build|make|develop|implement|design|code|program)\b[^.!?\n]{0,60}\b(app|application|crm|cms|erp|saas|api|service|system|platform|tool|website|site|web ?app|dashboard|interface|ui|ux|backend|frontend|database|schema|integration|workflow|bot|agent|script|module|feature|component|endpoint|extension|plugin|template|form|page|widget)\b/i.test(message)) return true;
+  // Research + analysis tasks
+  if (/\b(research|analyze|analyse|investigate|audit|review|compare|evaluate|assess|benchmark|survey)\b[^.!?\n]{0,40}\b(market|competitor|company|companies|product|tool|option|approach|strategy|industry|sector|technology|solution|pricing|feature|brand|startup|trend)\b/i.test(message)) return true;
+  // Document / deliverable creation
+  if (/\b(create|make|write|draft|outline|build|generate|produce|prepare)\b[^.!?\n]{0,40}\b(plan|strategy|roadmap|report|proposal|pitch|deck|brief|spec|specification|summary|overview|analysis|guide|tutorial|documentation|checklist|template|contract|nda|agreement|policy)\b/i.test(message)) return true;
+  // Data gathering / scraping
+  if (/\b(scrape|crawl|extract|gather|collect|fetch|find|lookup|look up|search for|search the web|search online)\b[^.!?\n]{0,40}\b(data|info|information|prices?|emails?|contacts?|leads?|results?|records?|news|articles?|pages?|links?|products?|listings?)\b/i.test(message)) return true;
+  return false;
+}
+
 // How many prior channel messages to feed back as conversation context.
 const CHAT_HISTORY_LIMIT = 16;
 
@@ -538,6 +559,52 @@ router.post("/ai/chat", async (req, res) => {
       });
       return;
     }
+    // Deterministic override: a general task demand (build X, create X, research X,
+    // etc.) must dispatch — the swarm produces real artifacts via tools; the inline
+    // chat path cannot execute anything. Catches imperatives that the LLM router
+    // might incorrectly classify as "I can explain this conversationally."
+    if (requestsTaskExecution(message) && !requestsConnectedAccountAction(message)) {
+      const goal = message.trim();
+      const ackText =
+        "**On it — dispatching the swarm.** The agents are spinning up now; their work and results will stream into this channel.";
+      sendEvent({ token: ackText });
+      await finishWith(ackText, model, "abby-router");
+      try {
+        const { steps, brain } = buildMissionSteps(goal, dispatchContext);
+        if (steps.length > 0 && brain.gate === "GO") {
+          await postSwarmDispatch({
+            channelId,
+            missionId: 0,
+            payload: {
+              phase: "decomposition",
+              phasesRemaining: 2,
+              totalSteps: steps.length,
+              dimensions: planDimensions({ plan: steps }),
+            },
+            agentName: agent.name,
+            agentColor: agent.color,
+          });
+        }
+      } catch (swarmErr) {
+        req.log.warn({ swarmErr }, "postSwarmDispatch (task-execution override) failed (non-fatal)");
+      }
+      orchestrateGoal({ goal, channelId, priority: "high", sourceContext: dispatchContext }).catch(async (e) => {
+        req.log.error({ e }, "orchestrateGoal (task-execution override) failed");
+        await db
+          .insert(messagesTable)
+          .values({
+            channelId,
+            agentId: agent.id,
+            agentName: agent.name,
+            agentColor: agent.color,
+            content: `Dispatch failed to start: ${String(e).slice(0, 300)}`,
+            messageType: "system",
+          })
+          .catch(() => {});
+      });
+      return;
+    }
+
     // Decide deterministically: DISPATCH the swarm, or just chat. We must not rely
     // on the model spontaneously calling a tool during a conversational turn — it
     // frequently NARRATES "dispatching…" without acting, leaving every agent idle.
@@ -546,13 +613,14 @@ router.post("/ai/chat", async (req, res) => {
     try {
       const decisionSystem =
         "You are the router for ABBY, orchestrator of an autonomous agent swarm that can search the web, browse sites, scrape pages, run code, call APIs, use long-term memory, generate images and downloadable files, AND act on the operator's OWN connected accounts — social platforms via their official APIs (Instagram, Facebook, X, LinkedIn, TikTok, YouTube, …) and SaaS apps via Composio (Gmail, Slack, GitHub, Notion, Google Calendar, Sheets, …). " +
-        "Classify the operator's latest message: is it an ACTIONABLE TASK that needs the swarm (anything requiring live/current data, web search, browsing, scraping, finding/pricing/looking things up online, code execution, multi-step research, OR checking/acting on the operator's own connected account) — or just CONVERSATION you can answer yourself (greetings, opinions, explanations, questions about you/the system)? " +
-        "CRITICAL: if the operator asks about or wants an action on THEIR OWN connected service — e.g. 'check my Instagram messages', 'any new emails?', 'post to my LinkedIn', 'what's on my calendar' — that is ACTIONABLE: dispatch=true with a goal telling the swarm to use the official API / Composio for that account. NEVER answer 'I don't have access to your personal account' — the swarm acts through the operator's connected integrations, and if an account isn't connected the AURA reports that honestly. " +
+        "YOUR DEFAULT IS DISPATCH=TRUE. The swarm executes — inline ABBY cannot. " +
+        "Classify: is this an ACTIONABLE TASK (a directive, request, instruction, or demand to create/build/do/find/analyze/write/research/implement/design/plan/generate/produce ANYTHING) — or PURE CONVERSATION (greetings, small-talk, or direct questions about the AI system itself)? " +
+        "CRITICAL: any request that asks for something to be DONE, MADE, FOUND, BUILT, WRITTEN, RESEARCHED, or PRODUCED is a task → dispatch=true, even if it sounds like a question. The swarm can do it; ABBY inline cannot. " +
+        "ALSO CRITICAL: if the operator asks about or wants an action on THEIR OWN connected service — 'check my Instagram messages', 'any new emails?', 'post to my LinkedIn' — dispatch=true. NEVER refuse with 'I don't have access'. " +
         "Respond with ONLY minified JSON, no markdown and no prose: " +
         '{"dispatch": true|false, "goal": "<self-contained instruction for the swarm; required if dispatch=true>", "reply": "<your conversational answer; required if dispatch=false>"}. ' +
-        "If the request needs real or current information you don't already have, prefer dispatch=true. " +
-        "ALSO dispatch=true whenever the request asks you to PRODUCE or SAVE a downloadable file/artifact (deck, report, PDF, CSV, document, code file), run code, fill/submit a form, or do any multi-step build — those need tools (save_artifact, code, web) that only the AURAs have, so answering inline cannot actually create a downloadable file. Only answer inline (dispatch=false) for pure conversation or a quick factual answer that needs no tool and no saved file. " +
-        "The `reply` must be ABBY's actual answer to the operator AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
+        "dispatch=false ONLY for: greetings (hello, hi, thanks), small-talk (how are you, what's your name), or a direct factual question about the AI system itself (what model are you, what can you do) — where a one-sentence reply genuinely closes the request. For EVERYTHING ELSE: dispatch=true. When in doubt: dispatch=true. " +
+        "The `reply` must be ABBY's actual answer AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
       const decRes = await fetch(llmFetchUrl("/chat/completions"), {
         method: "POST",
         headers: openrouterHeaders(),
