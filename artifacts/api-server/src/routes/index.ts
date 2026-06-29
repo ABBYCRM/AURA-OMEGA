@@ -20,6 +20,7 @@ import discordRouter from "./discord";
 import n8nRouter from "./n8n";
 import mvpGovernorRouter from "./mvpGovernor";
 import settingsRouter from "./settings";
+import referenceRouter from "./reference";
 import { requireOperator } from "../lib/auth";
 
 const router: IRouter = Router();
@@ -37,6 +38,7 @@ router.use("/discord", discordRouter);
 router.use(n8nRouter);
 router.use(mvpGovernorRouter);
 router.use(settingsRouter);
+router.use(referenceRouter);
 router.use(uploadsRouter);
 router.use(worldRouter);
 router.use(externalRouter);

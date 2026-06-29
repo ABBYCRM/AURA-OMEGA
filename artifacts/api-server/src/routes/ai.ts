@@ -7,6 +7,7 @@ import { listSecretNames } from "../lib/vault";
 import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
 import { SOURCE_POLICY } from "../lib/sources";
+import { DEV_DOCS_POLICY } from "../lib/knowledge-sources";
 import { MARKETING_ENGINE_POINTER } from "../lib/marketing";
 import { readSettings } from "./settings";
 
@@ -328,7 +329,7 @@ router.post("/ai/chat", async (req, res) => {
   // real, current tools + which integrations are online.
   const systemPrompt =
     (customPersonality ? customPersonality + "\n\n" : "") +
-    persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard());
+    persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + DEV_DOCS_POLICY + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard());
 
   // A user turn may carry uploaded files. Images are sent to the model as vision
   // input (which also reads text in the image — i.e. OCR); text-like files have
@@ -710,7 +711,7 @@ router.post("/ai/complete", async (req, res) => {
   const _customPersonality = readSettings().systemPersonality?.trim() ?? "";
   const systemPrompt =
     (_customPersonality ? _customPersonality + "\n\n" : "") +
-    (resolvedAgentId ? (AGENT_PERSONAS[resolvedAgentId] ?? "") : "") + buildCapabilityCard(resolvedAgentId) + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES;
+    (resolvedAgentId ? (AGENT_PERSONAS[resolvedAgentId] ?? "") : "") + buildCapabilityCard(resolvedAgentId) + DEV_DOCS_POLICY + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES;
 
   const messages = [
     ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),

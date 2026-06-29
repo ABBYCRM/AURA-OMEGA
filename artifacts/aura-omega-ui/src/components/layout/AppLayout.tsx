@@ -1,6 +1,7 @@
 import { Link, useLocation } from "wouter";
 import {
   Activity,
+  BookOpen,
   Bot,
   BrainCircuit,
   CalendarClock,
@@ -30,6 +31,7 @@ const toolsNav = [
   { href: "/tools",      icon: Workflow,        label: "Tools",       hint: "Tool matrix & n8n" },
   { href: "/scheduled",  icon: CalendarClock,   label: "Scheduled",   hint: "Cron & heartbeat" },
   { href: "/runtimes",   icon: ServerCog,       label: "Runtimes",    hint: "LLM & execution lanes" },
+  { href: "/reference",  icon: BookOpen,        label: "Reference",   hint: "Developer documentation library" },
 ];
 
 const configNav = [
