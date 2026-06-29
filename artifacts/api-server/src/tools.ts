@@ -16,6 +16,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { swarmPost, swarmRead } from "./lib/swarm-bus";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -149,6 +150,8 @@ export interface ToolContext {
   agentName: string;
   agentColor?: string | null;
   channelId?: number | null;
+  /** Shared run key for the current orchestration — enables swarm_broadcast/swarm_read. */
+  runKey?: string | null;
 }
 
 export interface ToolDef {
@@ -1514,6 +1517,49 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
     },
   },
 
+  swarm_broadcast: {
+    name: "swarm_broadcast",
+    description:
+      "Broadcast a finding, partial result, or status update to all other AURAs in this orchestration run. " +
+      "Use to share a key discovery mid-run so sibling agents and ABBY can factor it into their work. " +
+      "Keep messages short and factual — this is signal for teammates, not a final answer.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "The finding or status to share with sibling agents (max 500 chars)." },
+      },
+      required: ["message"],
+    },
+    run: async (args, ctx) => {
+      const msg = String(args["message"] ?? "").trim().slice(0, 500);
+      if (!msg) return "error: message is required.";
+      const runKey = ctx.runKey;
+      if (!runKey) return "swarm bus not available in this context (no runKey).";
+      swarmPost(runKey, ctx.agentId, ctx.agentName, msg);
+      return `broadcast posted to swarm run ${runKey.slice(-6)} — peers can read it via swarm_read.`;
+    },
+  },
+
+  swarm_read: {
+    name: "swarm_read",
+    description:
+      "Read all messages that sibling AURAs have broadcast during this orchestration run. " +
+      "Use early in your directive to learn what other agents have already found so you don't duplicate work.",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+    run: async (_args, ctx) => {
+      const runKey = ctx.runKey;
+      if (!runKey) return "swarm bus not available in this context (no runKey).";
+      const msgs = swarmRead(runKey);
+      if (msgs.length === 0) return "no swarm messages yet for this run — you are either first, or peers haven't broadcast.";
+      return msgs
+        .map((m) => `[${m.from}] ${m.content}`)
+        .join("\n---\n");
+    },
+  },
+
   cancel_scheduled_task: {
     name: "cancel_scheduled_task",
     description: "Cancel (delete) a scheduled cron job by its id. Use list_scheduled_tasks first to find the id.",
@@ -1539,11 +1585,11 @@ const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
 
 export const AGENT_TOOLS: Record<number, string[]> = {
   1: ALL_TOOLS, // ABBY — full authority
-  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message"], // AURA-1 — code
-  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message"], // AURA-2 — browser
-  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message"], // AURA-3 — memory/RAG
-  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "save_artifact", "image_generate", "send_message"], // AURA-4 — APIs + scheduling
-  6: ["web_scrape", "web_search", "tier1_sources", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "save_artifact", "image_generate", "send_message"], // AURA-5 — social
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-1 — code
+  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-2 — browser
+  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-3 — memory/RAG
+  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-4 — APIs + scheduling
+  6: ["web_scrape", "web_search", "tier1_sources", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-5 — social
 };
 
 export function getToolNamesForAgent(agentId: number): string[] {

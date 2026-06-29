@@ -32,6 +32,7 @@ import { evaluateAcceptance, aggregateVerification, progressFraction, confidence
 import { decideRetry } from "./retry";
 import { distillMission } from "./learning";
 import { runLearningLoop } from "../learning-loop";
+import { reflexiveCritique } from "../hermes/critique";
 import type { Mission, MissionStatus, MissionStep, AcceptanceVerdict } from "./types";
 
 const ACTIVE_STATUSES: MissionStatus[] = ["new", "planned", "executing", "verifying", "waiting"];
@@ -132,6 +133,15 @@ export async function tick(missionId: number): Promise<Mission | null> {
     lastError: decision.reason,
   });
   await emit("mission.blocked", missionId, { stepIndex: nextStep.index, attempts: decision.attempt }, "in-process");
+
+  // Feature 1: Reflexive self-critique on block — store a postmortem so future
+  // runs of the same goal can avoid repeating this failure pattern.
+  void reflexiveCritique({
+    goal: mission.goal,
+    failureReason: decision.reason,
+    missionId,
+  }).catch((err) => logger.error({ err }, "mission blocked: reflexive critique failed"));
+
   return getMission(missionId);
 }
 

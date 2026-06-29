@@ -49,7 +49,9 @@ import {
 } from "./tools";
 import { sendInngestEvent, traceLlmRun, llmBaseUrl, llmFetchUrl, llmRouteUrl, completeChat } from "./lib/integrations";
 import { groundingProof } from "./lib/grounding";
-import { recordOutcome } from "./lib/hermes";
+import { recordOutcome, matchSkillForGoal } from "./lib/hermes";
+import { reflexiveCritique, recallPostmortem } from "./lib/hermes/critique";
+import { swarmClear } from "./lib/swarm-bus";
 import {
   canonicalJson,
   checkToolPayloadBudget,
@@ -404,8 +406,9 @@ export async function executeAgentCommand(opts: {
   payload: string | null;
   channelId: number;
   sourceContext?: string | null;
+  runKey?: string | null;
 }): Promise<string> {
-  const { commandId, agent, command, payload, channelId, sourceContext } = opts;
+  const { commandId, agent, command, payload, channelId, sourceContext, runKey } = opts;
   // Grounding proof: prove the operator's source material reached this AURA
   // (length + hash only, never the raw content). Persisted for the Dispatch panel.
   const proof = groundingProof(sourceContext);
@@ -440,9 +443,19 @@ export async function executeAgentCommand(opts: {
       type: "thought",
     });
 
-    const ctx: ToolContext = { agentId: agent.id, agentName: agent.name, agentColor: agent.color, channelId };
+    const ctx: ToolContext = { agentId: agent.id, agentName: agent.name, agentColor: agent.color, channelId, runKey: runKey ?? null };
     const toolNames = getToolNamesForAgent(agent.id);
     const tools = getOpenAiToolsForAgent(agent.id);
+
+    // ── Feature 2: Proactive Skill Injection ─────────────────────────────────
+    // Match this directive against Hermes' library of proven skill patterns.
+    // If we find an active skill (score >= 0.7), inject a hint block into the
+    // system prompt so the agent starts with the known-good tool sequence
+    // rather than rediscovering it from scratch on every run.
+    const skillMatch = await matchSkillForGoal(command).catch(() => null);
+    const skillHint = skillMatch && skillMatch.successScore >= 0.7
+      ? `\n\nHERMES SKILL HINT (proven pattern — follow this first):\nSkill: "${skillMatch.name}" · ${skillMatch.description}\nSuccess rate: ${Math.round(skillMatch.successScore * 100)}% · Match: ${skillMatch.matchReason}\nUse this known-good pattern before trying a novel approach.`
+      : "";
 
     // Convenience pre-scrape: if the browser AURA is handed a URL, fetch it once
     // up front so it starts the loop with live data (it can still call more tools).
@@ -484,7 +497,7 @@ export async function executeAgentCommand(opts: {
       ? `\n\nYou are an autonomous tool-using agent. Call tools to gather real data and perform real work instead of guessing — chain multiple calls when needed, and avoid repeating a call that already returned (it wastes time and budget). When the directive is fully satisfied, stop calling tools and reply with your final concrete result (no preamble).${buildCapabilityCard(agent.id)}`
       : "";
     const _agentPersonality = readSettings().systemPersonality?.trim() ?? "";
-    const system = (_agentPersonality ? _agentPersonality + "\n\n" : "") + persona + toolGuide + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
+    const system = (_agentPersonality ? _agentPersonality + "\n\n" : "") + persona + toolGuide + skillHint + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
 
     const messages: ChatMessage[] = [
       { role: "system", content: system },
@@ -782,6 +795,7 @@ async function dispatchDirectives(
   priority: string,
   abby: Agent | null,
   sourceContext?: string | null,
+  runKey?: string | null,
 ): Promise<Array<{ name: string; result: string }>> {
   if (isSwarmPaused()) {
     await postMessage({
@@ -847,6 +861,7 @@ async function dispatchDirectives(
       payload: null,
       channelId,
       sourceContext,
+      runKey,
     });
     return { name: agent.name, result };
   });
@@ -875,6 +890,9 @@ export async function orchestrateGoal(opts: {
 }): Promise<void> {
   const { goal, channelId, priority, sourceContext, forceAgentId } = opts;
   const startedAt = new Date();
+  // Unique key for this orchestration run — scopes swarm_broadcast/swarm_read messages
+  // and correlates all concurrent AURA executions to the same bus partition.
+  const runKey = `ch${channelId}-${startedAt.getTime().toString(36)}`;
   // Declare finalAnswer at the top of the function so every exit path (early
   // return on clarification, swarm paused, no directives, post-dispatch catch,
   // etc.) has a defined value to pass to recordOutcome() and ensureFinalAnswer().
@@ -937,8 +955,22 @@ export async function orchestrateGoal(opts: {
     const roster = auras
       .map((c) => `${c.id}=${c.name} (${c.role ?? "agent"})`)
       .join(", ");
+    // ── Feature 1 + 2: Recall postmortem & skill match for ABBY's planning ─────
+    // If a prior run for this goal failed, inject the diagnosed root causes so
+    // ABBY's planner avoids the same decomposition that failed last time.
+    const [priorPostmortem, planSkill] = await Promise.all([
+      recallPostmortem(goal).catch(() => null),
+      matchSkillForGoal(goal).catch(() => null),
+    ]);
+    const postmortemNote = priorPostmortem
+      ? `\n\nPRIOR FAILURE POSTMORTEM (a previous run of this goal failed — avoid these patterns):\nRoot causes: ${priorPostmortem.rootCauses.join("; ")}\nAvoid: ${priorPostmortem.avoidPatterns.join("; ")}\nRevised approach for this run: ${priorPostmortem.revisedApproach}`
+      : "";
+    const planSkillNote = planSkill && planSkill.successScore >= 0.7
+      ? `\n\nHERMES SKILL MATCH (proven pattern at ${Math.round(planSkill.successScore * 100)}% success): "${planSkill.name}" — ${planSkill.description}. Route to AURA #${planSkill.preferredAura ?? "any"} if relevant.`
+      : "";
+
     const _planPersonality = readSettings().systemPersonality?.trim() ?? "";
-    const planSystem = (_planPersonality ? _planPersonality + "\n\n" : "") + (AGENT_PERSONAS[ABBY_ID] ?? "You are ABBY, the swarm orchestrator.") + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
+    const planSystem = (_planPersonality ? _planPersonality + "\n\n" : "") + (AGENT_PERSONAS[ABBY_ID] ?? "You are ABBY, the swarm orchestrator.") + postmortemNote + planSkillNote + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
     const planUser = `Operator goal: "${goal}"
 ${sourceContext && sourceContext.trim() ? `\nThe operator provided this source material to work from (decompose against THIS; the AURAs will receive it too — do not tell them to search memory for it):\n"""\n${sourceContext.slice(0, 12000)}\n"""\n` : ""}
 Available AURAs you command: ${roster}.
@@ -1001,6 +1033,7 @@ Respond with ONLY a JSON array (no prose, no code fences) of objects shaped: {"a
       priority,
       abby,
       sourceContext,
+      runKey,
     );
 
     // ── ABBY coordinator pass ──
@@ -1042,7 +1075,7 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
               .join("\n"),
           messageType: "agent",
         });
-        const more = await dispatchDirectives(followups, auras, channelId, priority, abby, sourceContext);
+        const more = await dispatchDirectives(followups, auras, channelId, priority, abby, sourceContext, runKey);
         results.push(...more);
       }
     }
@@ -1134,6 +1167,21 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       startedAt: startedAt,
       completedAt: new Date(),
     });
+
+    // ── Feature 1: Reflexive self-critique on failure ─────────────────────────
+    // If the run failed or was contaminated, kick off a background critique so
+    // the system builds institutional memory from this failure. The critique is
+    // stored in Hermes and injected into future runs of similar goals.
+    if (outcome === "failed" || outcome === "partial") {
+      void reflexiveCritique({
+        goal,
+        failureReason: finalAnswer.slice(0, 600) || "no final answer produced",
+        auraReports: results.map((r) => ({ name: r.name, result: r.result })),
+      }).catch((err) => logger.error({ err }, "orchestrateGoal: reflexive critique failed"));
+    }
+
+    // Clean up the ephemeral swarm bus for this run.
+    swarmClear(runKey);
   } catch (err) {
     logger.error({ err }, "orchestrateGoal failed");
     void sendInngestEvent("swarm/goal.failed", { goal, channelId, error: String(err).slice(0, 300) });
@@ -1152,6 +1200,9 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       startedAt,
       completedAt: new Date(),
     });
+    // Store a postmortem for hard crashes too.
+    void reflexiveCritique({ goal, failureReason: String(err).slice(0, 400) }).catch(() => {});
+    swarmClear(runKey);
     await db
       .update(agentsTable)
       .set({ status: "idle" })
