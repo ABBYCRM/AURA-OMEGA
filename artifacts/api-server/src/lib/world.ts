@@ -10,7 +10,7 @@ import { db, pool } from "@workspace/db";
 import { agentsTable, agentCommandsTable, attachmentsTable } from "@workspace/db";
 import { gte } from "drizzle-orm";
 import { logger } from "./logger";
-import { composioConfigured, composioExecuteEnabled, composioExecute, llmBaseUrl, llmHeaders, nvidiaConfigured } from "./integrations";
+import { composioConfigured, composioExecuteEnabled, composioExecute, llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, nvidiaConfigured } from "./integrations";
 import { blockIfSensitiveForPublic } from "./safety";
 import { renderTraversalBlock, sliceSixTiles, verifyBlock, renderStoryFrame, verifyNotBlank, renderIntroCard, renderWorldFrame, sliceTiles } from "./worldEngine";
 import { steelScrape } from "../tools";
@@ -187,7 +187,7 @@ async function llmOnce(system: string, user: string, maxTokens = 160): Promise<s
   let headers: Record<string, string>;
   try { headers = llmHeaders(); } catch { return null; }
   try {
-    const r = await fetch(`${llmBaseUrl()}/chat/completions`, {
+    const r = await fetch(llmRouteUrl("/chat/completions"), {
       method: "POST",
       headers,
       body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.95 }),

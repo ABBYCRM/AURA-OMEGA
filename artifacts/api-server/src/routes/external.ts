@@ -20,7 +20,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, channelsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
-import { llmBaseUrl, llmHeaders } from "../lib/integrations";
+import { llmBaseUrl, llmFetchUrl, llmHeaders } from "../lib/integrations";
 import { timingSafeStrEqual } from "../lib/auth";
 import { ANTI_HALLUCINATION_DIRECTIVE } from "./ai";
 
@@ -165,7 +165,7 @@ router.post("/external/v1/chat/completions", async (req, res) => {
     };
 
     try {
-      const orRes = await fetch(`${llmBaseUrl()}/chat/completions`, {
+      const orRes = await fetch(llmFetchUrl("/chat/completions"), {
         method: "POST",
         headers: orHeaders,
         body: JSON.stringify({ model: agent.model, stream: true, messages: orMessages, max_tokens }),
@@ -211,7 +211,7 @@ router.post("/external/v1/chat/completions", async (req, res) => {
 
   // ── Non-streaming response ───────────────────────────────────────────────
   try {
-    const orRes = await fetch(`${llmBaseUrl()}/chat/completions`, {
+    const orRes = await fetch(llmFetchUrl("/chat/completions"), {
       method: "POST",
       headers: orHeaders,
       body: JSON.stringify({ model: agent.model, messages: orMessages, max_tokens }),

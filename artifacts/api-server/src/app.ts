@@ -7,6 +7,12 @@ import { logger } from "./lib/logger";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { boot as bootMissionKernel } from "./lib/mission";
+import { setHermesToolRunner, setOpenHandsToolRunner } from "./lib/mission";
+import { setBrainToolRunner, setBrainLLM } from "./lib/mission/engines/brain-engine";
+import { setLearningLoopDeps } from "./lib/learning-loop";
+import { runTool } from "./tools";
+import { completeChat } from "./lib/integrations";
 
 const app: Express = express();
 
@@ -50,6 +56,45 @@ app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 app.get("/healthz", (_req, res) => {
   res.json({ status: "ok", service: "aura-omega-api" });
 });
+
+// Operator 2026-06-30: actionable DB status. Tries a 2s SELECT 1 against
+// the configured DATABASE_URL. Returns 200 with status:"ok" when DB is
+// reachable, 503 with status:"down" + the actual error when not.
+// This is the first thing the operator should hit when "everything is
+// broken" — it tells them whether the DB itself is gone.
+app.get("/health/db", async (_req, res) => {
+  const start = Date.now();
+  try {
+    const { pool } = await import("@workspace/db");
+    const c = await Promise.race([
+      pool.connect(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("acquire timeout (2s)")), 2000),
+      ),
+    ]);
+    try {
+      await c.query("SELECT 1");
+      res.json({
+        status: "ok",
+        database: "reachable",
+        latencyMs: Date.now() - start,
+        host: process.env["DATABASE_URL"]?.split("@")[1]?.split("/")[0] ?? "(no DATABASE_URL)",
+      });
+    } finally {
+      c.release();
+    }
+  } catch (err) {
+    res.status(503).json({
+      status: "down",
+      database: "unreachable",
+      error: String(err instanceof Error ? err.message : err).slice(0, 200),
+      host: process.env["DATABASE_URL"]?.split("@")[1]?.split("/")[0] ?? "(no DATABASE_URL)",
+      hint: "If the original Render postgres was deleted/migrated, " +
+            "create a new one in the Render dashboard and update DATABASE_URL " +
+            "via the Render API.",
+    });
+  }
+});
 app.get("/version", (_req, res) => {
   res.json({
     version: process.env["DEPLOY_VERSION"] ?? "dev",
@@ -58,7 +103,64 @@ app.get("/version", (_req, res) => {
   });
 });
 
+// Debug: dump env vars (no secrets — lengths and prefixes only)
+// Mounted directly on app to bypass ALL route-level middleware.
+app.get("/_debug/env", async (_req, res) => {
+  const keys = ['DATABASE_URL', 'NVIDIA_API_KEY', 'NVIDIA_API_KEYS', 'DEPLOY_VERSION', 'SCRAPINGBEE_API_KEY', 'KIMI_API_KEY', 'ABBY_MODEL', 'PORT', 'NODE_ENV'];
+  const result: Record<string, { len: number; prefix: string }> = {};
+  for (const k of keys) {
+    const v = process.env[k];
+    result[k] = { len: v?.length ?? 0, prefix: v ? v.substring(0, 20) : 'UNDEFINED' };
+  }
+  let keyCount = -1;
+  let keyError = '';
+  try {
+    const { nvidiaKeys } = await import('./lib/integrations');
+    const keys = nvidiaKeys();
+    keyCount = keys.length;
+    keyError = 'none';
+  } catch (e: any) {
+    keyError = e?.message || String(e);
+  }
+  res.json({ env: result, nvidiaKeyCount: keyCount, keyError, timestamp: new Date().toISOString() });
+});
+
 app.use("/api", router);
+
+// Boot the Mission Kernel so it can resume in-flight missions and listen
+// for in-process step.completed events. Idempotent.
+if (process.env["DISABLE_MISSION_KERNEL"] !== "true") {
+  // Wire the engine tool runners so hermes/openhands engines can call into
+  // the existing TOOL_REGISTRY via runTool(). Agents 1 (ABBY, full authority)
+  // and 2 (AURA-1, code) have the broadest tool access. Missions run as
+  // ABBY by default.
+  // Mission kernels always run as ABBY (agentId=1) which has the full tool set
+// — agents 2-6 each only have their specialty. The engine's own ToolContext
+// (with its agentId) is kept in the metadata for observability, but the
+// authoritative agent identity passed to runTool is always ABBY.
+setHermesToolRunner(async (tool, args, ctx) =>
+  runTool(tool, args, { agentId: 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+);
+setOpenHandsToolRunner(async (tool, args, ctx) =>
+  runTool(tool, args, { agentId: 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+);
+// Brain engine: synthesizes the final answer for each mission by reading back
+// all evidence from mission memory and asking K2.6 to consolidate it. Wired
+// the same way as the other engines so the brain step can call runTool + LLM.
+setBrainToolRunner(async (tool, args, ctx) =>
+  runTool(tool, args, { agentId: 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+);
+setBrainLLM(async (model, system, user, maxTokens) => completeChat(model, system, user, maxTokens));
+// Learning loop: extracts durable knowledge from completed missions and
+// persists to hermes under knowledge/<topic>/<slug>. Operator doctrine
+// 2026-06-27: "read, understand, learn, add to memory, then perform".
+setLearningLoopDeps({
+  completeChat: async (model, system, user, maxTokens) => completeChat(model, system, user, maxTokens),
+  runTool: async (tool, args, ctx) => runTool(tool, args, { agentId: 1, agentName: ctx.agentName ?? "ABBY", agentColor: ctx.agentColor ?? null, channelId: ctx.channelId ?? null }),
+});
+  bootMissionKernel();
+  logger.info("Mission Kernel booted (engines: hermes + openhands wired)");
+}
 
 // In production, serve the Vite-built frontend if it was bundled into the image.
 const __filename_app = fileURLToPath(import.meta.url);
@@ -87,6 +189,7 @@ if (hasFrontend) {
   );
   app.get("/*path", (req, res, next) => {
     if (req.path.startsWith("/api")) return next();
+    if (req.path.startsWith("/_debug")) return next();
     // Missing static assets (paths with a file extension) should 404, not
     // fall back to the SPA shell — otherwise stale asset requests get HTML 200.
     if (path.extname(req.path)) return next();

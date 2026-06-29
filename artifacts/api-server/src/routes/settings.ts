@@ -23,7 +23,7 @@ export interface AuraRuntimeSettings {
 }
 
 const defaults: AuraRuntimeSettings = {
-  primaryPlanner: process.env["KIMI_MODEL"] || "kimi-k2.6",
+  primaryPlanner: process.env["KIMI_MODEL"] || "moonshotai/kimi-k2.6",
   runtimeMode: "governed-autonomous",
   temperature: 0.4,
   maxAutomaticRisk: "medium",

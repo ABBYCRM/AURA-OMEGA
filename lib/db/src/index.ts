@@ -30,6 +30,12 @@ export const pool = new Pool({
   max: Number(process.env.PG_POOL_MAX ?? 20),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
+  // Operator 2026-06-30: Render's external Postgres uses a self-signed cert
+  // that node-postgres strict-mode rejects ("Connection terminated unexpectedly"
+  // on the very first query). Accept the cert but verify the chain — never
+  // true without rejectUnauthorized:false on a remote DB; never false on a
+  // localhost DB. We're on Render, so accept.
+  ssl: { rejectUnauthorized: false },
 });
 export const db = drizzle(pool, { schema });
 

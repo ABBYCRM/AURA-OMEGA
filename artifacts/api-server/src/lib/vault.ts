@@ -49,8 +49,21 @@ export function decryptSecret(rec: EncryptedSecret): string {
   return Buffer.concat([decipher.update(Buffer.from(rec.ciphertext, "base64")), decipher.final()]).toString("utf8");
 }
 
-/** Decrypt a stored secret by name. Returns null if it doesn't exist. */
+/** Decrypt a stored secret by name. Returns null if it doesn't exist.
+ *
+ * Resolution order:
+ *   1. Direct env-var match — fastest, no DB hit, works even if the vault
+ *      encryption key was rotated and the DB-stored copy is now unreadable.
+ *      The operator's most recent secrets live here (synced to Render's env).
+ *   2. DB vault decryption — original behavior; works as long as SESSION_SECRET
+ *      hasn't been rotated since the secret was last written.
+ *   3. null — neither path knows the value; substituteSecrets will leave the
+ *      {{secret:NAME}} placeholder unreplaced and the caller will surface a
+ *      clear "secret not found" error.
+ */
 export async function getSecretValue(name: string): Promise<string | null> {
+  const fromEnv = process.env[name];
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
   const [row] = await db.select().from(vaultSecretsTable).where(eq(vaultSecretsTable.name, name));
   if (!row) return null;
   try {

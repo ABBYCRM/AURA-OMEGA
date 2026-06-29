@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { logger } from "./lib/logger";
 import { db } from "@workspace/db";
 import { agentMemoryTable, vaultSecretsTable, messagesTable, cronJobsTable, attachmentsTable } from "@workspace/db";
+import { verifyArtifactDelivery } from "./lib/runtimeGuards";
 import { desc, ilike, or, isNotNull, eq } from "drizzle-orm";
 import { substituteSecrets, redactSecrets, hasSecretPlaceholder } from "./lib/vault";
 import {
@@ -357,18 +358,39 @@ function scrapeLooksBlocked(text: string): boolean {
   );
 }
 
+/** Per-attempt timeout for Steel scrape calls. Render's shared IP plus slow
+ * proxy sites can hang for 30-60s+; without this the mission runtime waits
+ * 30+ minutes per page and blocks the whole mission. 18s direct / 30s proxy
+ * is enough for most sites while still failing fast on dead ones. */
+const STEEL_SCRAPE_TIMEOUT_MS_DIRECT = 18_000;
+const STEEL_SCRAPE_TIMEOUT_MS_PROXY = 30_000;
+
 /** Single Steel scrape pass (optionally through a residential proxy). */
 async function steelScrapeOnce(url: string, useProxy: boolean): Promise<string> {
   const key = process.env["STEEL_API_KEY"];
   if (!key) throw new Error("STEEL_API_KEY is not set");
-  const r = await fetch(`${STEEL_BASE}/scrape`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    // Ask for cleaned markdown, not raw HTML — far more signal per character, so a
-    // single scrape fits the readable content (titles, scores) inside the response
-    // budget instead of being truncated mid-page and forcing extra calls.
-    body: JSON.stringify({ url, format: ["markdown"], useProxy }),
-  });
+  const timeoutMs = useProxy ? STEEL_SCRAPE_TIMEOUT_MS_PROXY : STEEL_SCRAPE_TIMEOUT_MS_DIRECT;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let r: Response;
+  try {
+    r = await fetch(`${STEEL_BASE}/scrape`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      // Ask for cleaned markdown, not raw HTML — far more signal per character, so a
+      // single scrape fits the readable content (titles, scores) inside the response
+      // budget instead of being truncated mid-page and forcing extra calls.
+      body: JSON.stringify({ url, format: ["markdown"], useProxy }),
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      throw new Error(`Steel scrape timed out after ${timeoutMs}ms (url=${url}, proxy=${useProxy})`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!r.ok) throw new Error(`Steel ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const data = (await r.json()) as Record<string, unknown>;
   const content = data["content"] as Record<string, unknown> | string | undefined;
@@ -1058,9 +1080,27 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
           .values({ filename, mimeType, kind, sizeBytes: bytes, data: base64, extractedText: null })
           .returning();
         const url = uploadUrl(row.id, true);
-        return `saved "${filename}" (${bytes} bytes, ${mimeType}). Operator download link — INCLUDE THIS in your final answer:\n[Download ${filename}](${url})`;
+        // Artifact delivery verification — the run succeeded and we have a
+        // non-empty file with a URL, so status is COMPLETE. The orchestrator's
+        // post-run check uses the same helpers, but precomputing it here lets
+        // the agent see the verification result in its own context and refuse
+        // to claim delivery when it isn't real.
+        const verification = verifyArtifactDelivery({
+          toolSucceeded: true,
+          url,
+          fileId: row.id,
+          contentLength: bytes,
+          expectedType: mimeType,
+          actualType: mimeType,
+        });
+        if (verification.status === "COMPLETE") {
+          return `saved "${filename}" (${bytes} bytes, ${mimeType}). Operator download link — INCLUDE THIS in your final answer:\n[Download ${filename}](${url})\nartifact_status: COMPLETE`;
+        }
+        return `saved CONTENT_READY_ARTIFACT_FAILED for "${filename}": reasons=${verification.reasons.join("; ")}. Inline content follows so the operator still has it:\n\n${raw.slice(0, 2000)}`;
       } catch (e) {
-        return `error: could not save artifact: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
+        // The save failed — return the inline content so the operator still
+        // has it and the agent does not falsely claim delivery.
+        return `error: could not save artifact: ${String(e instanceof Error ? e.message : e).slice(0, 200)}\nartifact_status: CONTENT_READY_ARTIFACT_FAILED\n\nInline content (operator can copy):\n${raw.slice(0, 2000)}`;
       }
     },
   },

@@ -5,6 +5,7 @@ import { getListMessagesQueryKey } from "@workspace/api-client-react";
 import { format } from "date-fns";
 import { Terminal, Bot, Shield, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SwarmDispatchMessage, parseSwarmMetadata } from "@/components/chat/SwarmDispatchMessage";
 
 interface ChatStreamProps {
   channelId: number | null;

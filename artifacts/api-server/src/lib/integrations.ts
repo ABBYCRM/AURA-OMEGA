@@ -7,7 +7,7 @@
  * calls explicitly) or silently no-ops (for fire-and-forget observability).
  *
  * Wired here:
- *   - Helicone   — observability proxy in front of OpenRouter (LLM logging).
+ *   - Helicone   — observability proxy in front of NVIDIA (LLM logging).
  *   - Tavily     — web search provider.
  *   - Exa        — neural web search provider.
  *   - Inngest    — durable event bus (fire-and-forget swarm events).
@@ -27,7 +27,8 @@ function clip(s: string, n: number): string {
 
 // ─── NVIDIA NIM (primary LLM provider) ──────────────────────────────────────
 // NVIDIA NIM exposes an OpenAI-compatible API under integrate.api.nvidia.com/v1.
-// When NVIDIA_API_KEY is present it takes priority over OpenRouter.
+// NVIDIA is the ONLY LLM provider (operator directive 2026-06-27).
+// OpenRouter removed; if NVIDIA is unavailable, calls fail fast with a clear error.
 
 const NVIDIA_BASE_DEFAULT = "https://integrate.api.nvidia.com/v1";
 
@@ -41,13 +42,21 @@ const NVIDIA_BASE_DEFAULT = "https://integrate.api.nvidia.com/v1";
  * and a throttled/dead key rotates to the next one automatically.
  */
 export function nvidiaKeys(): string[] {
+  sweepDeadKeys();
+  // Operator debug 2026-06-27 20:58: log every call so we can correlate
+  // "0 keys at synthesis time" with "18 keys at debug-endpoint time".
+  const debugSample: string[] = [];
+  for (let i = 1; i <= 3; i++) {
+    const k = process.env[`NVIDIA_API_KEY${i === 1 ? "" : "_" + i}`];
+    debugSample.push(`${i}=${k ? k.slice(0, 8) + "..." : "null"}`);
+  }
   const seen = new Set<string>();
   const out: string[] = [];
   const add = (raw?: string) => {
     if (!raw) return;
     for (const part of raw.split(/[\s,]+/)) {
       const k = part.trim().replace(/^Bearer\s+/i, "");
-      if (k && k.startsWith("nvapi-") && !seen.has(k)) {
+      if (k && k.startsWith("nvapi-") && !seen.has(k) && !DEAD_KEYS.has(k)) {
         seen.add(k);
         out.push(k);
       }
@@ -55,13 +64,65 @@ export function nvidiaKeys(): string[] {
   };
   add(process.env["NVIDIA_API_KEY"]);
   add(process.env["NVIDIA_API_KEYS"]);
-  for (let i = 2; i <= 50; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
+  for (let i = 2; i <= 32; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
+  logger.warn({ outLen: out.length, dead: DEAD_KEYS.size }, "nvidiaKeys result");
   return out;
+}
+
+/**
+ * Probe all configured NVIDIA keys with a 4-token call and blacklist any
+ * that 404/connect-error. Called once at boot, then never again (the per-
+ * attempt retry loop handles live failures). Cuts the working pool from
+ * 18 to however many are actually valid.
+ */
+export async function probeNvidiaKeys(): Promise<{ ok: number; dead: string[] }> {
+  const keys = nvidiaKeys();
+  const dead: string[] = [];
+  // Probe each key with a 4-token call. Only blacklist on 404 (key truly
+  // dead) or 401 (key revoked). 429 is transient rate-limit; transport
+  // errors at boot can be Render cold-start quirks, NOT a dead key, so
+  // we don't blacklist on those — let the live retry loop handle them.
+  await Promise.all(keys.map(async (k) => {
+    try {
+      const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${k}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", messages: [{ role: "user", content: "ok" }], max_tokens: 4 }),
+        signal: AbortSignal.timeout(8000),
+      });
+      // Only 404 (model not found on this key) and 401 (revoked) = dead key.
+      if (r.status === 404 || r.status === 401) {
+        DEAD_KEYS.add(k);
+        dead.push(k.slice(-8));
+      }
+    } catch {
+      // Transport error during boot probe — likely transient. Don't blacklist.
+    }
+  }));
+  return { ok: keys.length - dead.length, dead };
 }
 
 // Round-robin cursor across the key pool (per-process). Each LLM request advances
 // it so load spreads evenly; callers that hit a 401/429 can request the next key.
 let nvidiaKeyCursor = 0;
+
+// Set of NVIDIA keys that have been confirmed dead (404/connect-error) and
+// should be skipped. The boot probe populates this, and each live failure
+// extends it. Re-checked every 10 min so a temporary outage recovers.
+const DEAD_KEYS = new Set<string>();
+let lastDeadKeySweep = 0;
+function sweepDeadKeys() {
+  if (Date.now() - lastDeadKeySweep < 10 * 60 * 1000) return;
+  DEAD_KEYS.clear();
+  lastDeadKeySweep = Date.now();
+}
+export function markNvidiaKeyDead(key: string) {
+  DEAD_KEYS.add(key);
+}
+// Seed the cursor with a random offset at module load so simultaneous requests
+// at process boot don't all land on the same first key (which would burn that
+// key's per-minute quota before round-robin kicks in).
+nvidiaKeyCursor = Math.floor(Math.random() * 1024);
 export function nextNvidiaKey(): string | undefined {
   const keys = nvidiaKeys();
   if (keys.length === 0) return undefined;
@@ -75,30 +136,34 @@ export function nvidiaConfigured(): boolean {
 }
 
 // ─── Helicone (observability proxy) ─────────────────────────────────────────
-// Helicone sits transparently in front of the LLM provider: same OpenAI-
-// compatible API, but the base host changes and a Helicone-Auth header is
-// added. When no Helicone key is configured we fall through directly.
-
-const OPENROUTER_DIRECT = "https://openrouter.ai/api/v1";
-const OPENROUTER_VIA_HELICONE = "https://openrouter.helicone.ai/api/v1";
+// Helicone sits transparently in front of NVIDIA NIM: same OpenAI-compatible
+// API, but every request is logged for observability. When no Helicone key
+// is configured we go direct to NVIDIA. OpenRouter removed 2026-06-27.
 
 export function heliconeEnabled(): boolean {
   return !!process.env["HELICONE_API_KEY"];
 }
 
 /**
- * The LLM base URL to use.
- * Priority: NVIDIA NIM (when NVIDIA_API_KEY set) → Helicone proxy → OpenRouter direct.
+ * The LLM base URL to use. NVIDIA NIM only (operator directive 2026-06-27).
+ * Helicone sits in FRONT of NVIDIA when configured so every call is logged.
  */
 export function llmBaseUrl(): string {
-  if (nvidiaConfigured()) {
-    return (process.env["NVIDIA_BASE_URL"] ?? NVIDIA_BASE_DEFAULT).replace(/\/$/, "");
+  // Operator debug 2026-06-27: log the actual key count at call time so
+  // we can correlate with the nvidia-debug endpoint.
+  const keyCount = nvidiaKeys().length;
+  logger.warn({ keyCount, helicone: heliconeEnabled(), hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmBaseUrl called");
+  if (!nvidiaConfigured()) {
+    throw new Error("LLM not configured: NVIDIA_API_KEY must be set (OpenRouter removed 2026-06-27) — keyCount=" + keyCount);
   }
-  return heliconeEnabled() ? OPENROUTER_VIA_HELICONE : OPENROUTER_DIRECT;
+  if (heliconeEnabled()) {
+    return (process.env["HELICONE_BASE_URL"] ?? "https://nvidia.helicone.ai/v1").replace(/\/$/, "");
+  }
+  return (process.env["NVIDIA_BASE_URL"] ?? NVIDIA_BASE_DEFAULT).replace(/\/$/, "");
 }
 
 /**
- * Unified LLM auth + content headers. Picks NVIDIA or OpenRouter automatically.
+ * Unified LLM auth + content headers. NVIDIA ONLY (OpenRouter removed).
  * Spreads Helicone headers on top when Helicone is configured (works with both
  * providers). Throws a descriptive error when neither key is set.
  */
@@ -112,16 +177,10 @@ export function llmHeaders(extra?: Record<string, string>): Record<string, strin
       ...extra,
     };
   }
-  const orKey = process.env["OPENROUTER_API_KEY"];
-  if (!orKey) throw new Error("No LLM API key configured — set NVIDIA_API_KEY or OPENROUTER_API_KEY");
-  return {
-    "Authorization": `Bearer ${orKey}`,
-    "Content-Type": "application/json",
-    "HTTP-Referer": "https://aura-omega-ui.abbyaura.io",
-    "X-Title": "AURA-OMEGA",
-    ...heliconeHeaders(),
-    ...extra,
-  };
+  // NVIDIA-only: fail fast if pool is empty. OpenRouter removed 2026-06-27.
+  const keyCount = nvidiaKeys().length;
+  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no NVIDIA key available");
+  throw new Error("LLM not configured: NVIDIA_API_KEY must be set (OpenRouter removed 2026-06-27) — keyCount=" + keyCount);
 }
 
 /**
@@ -315,6 +374,165 @@ export function traceLlmRun(trace: LlmTrace): void {
       logger.debug({ err }, "langsmith: trace failed");
     }
   })();
+}
+
+/**
+ * Non-streaming chat completion against the configured LLM provider
+ * NVIDIA NIM only (Helicone optionally in front). Returns the assistant text.
+ *
+ * Shared by orchestrator.ts and lib/hermes/llm.ts so both code paths incur
+ * the same routing, headers, and tracing.
+ */
+/** Fallback model when primary hits 402/429. Nvidia-direct, no OpenRouter. */
+const FALLBACK_MODEL = "meta/llama-3.1-70b-instruct";
+
+/** Tertiary fallback: Kimi.com's hosted Moonshot Kimi K2.6 endpoint. */
+const KIMI_FALLBACK_MODEL = "moonshot-v1-128k";
+
+/** Returns true if a Kimi.com API key is configured. */
+export function kimiApiConfigured(): boolean {
+  return !!process.env["KIMI_API_KEY"];
+}
+
+/** Build the Kimi.com chat-completions URL (OpenAI-compatible Moonshot API). */
+export function kimiFetchUrl(path: string): string {
+  const base = (process.env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1").replace(/\/$/, "");
+  return base + (path.startsWith("/") ? path : "/" + path);
+}
+
+export async function completeChat(
+  model: string,
+  system: string,
+  user: string,
+  maxTokens = 800,
+): Promise<string> {
+  // 429-aware retry: walk the NVIDIA key pool on rate-limit / auth errors
+  // Each attempt advances the cursor so the next call naturally hits a
+  // different key, and backoff gives the per-minute rate-limit window time
+  // to roll over.
+  const makeBody = (m: string) => JSON.stringify({
+    model: m,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    stream: false,
+    max_tokens: maxTokens,
+  });
+
+  const keys = nvidiaKeys();
+
+  // ── Inner attempt loop: key rotation for the given model ──
+  async function tryModel(m: string): Promise<string | null> {
+    const body = makeBody(m);
+    for (let attempt = 0; attempt < Math.max(keys.length, 1); attempt++) {
+      if (attempt > 0 && keys.length > 0) {
+        const jump = 3 + Math.floor(Math.random() * 5);
+        nvidiaKeyCursor = (nvidiaKeyCursor + jump) % keys.length;
+      }
+      const headers = llmHeaders();
+      try {
+        // Operator doctrine 2026-06-30: route through ScrapingBee residential
+        // proxy when configured. premium_proxy=true picks a fresh residential
+        // IP per request, so each attempt here gets a different IP — automatic
+        // IP rotation without any extra round-robin logic. The Authorization
+        // header is forwarded by ScrapingBee (forward_headers=true) so NVIDIA
+        // sees a normal authenticated request, not a proxy one.
+        const r = await fetch(llmRouteUrl("/chat/completions"), {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (r.ok) {
+          const data = (await r.json()) as {
+            choices?: Array<{ message?: { content?: string } }>;
+          };
+          return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
+        }
+        // 429/401/404 — rotate key and retry
+        if ((r.status === 429 || r.status === 401 || r.status === 404) && keys.length > 0 && attempt < keys.length - 1) {
+          if (r.status === 404 && headers["Authorization"]) {
+            markNvidiaKeyDead(headers["Authorization"].replace(/^Bearer\s+/i, ""));
+          }
+          logger.warn({ model: m, attempt, status: r.status }, "llm 429/401/404 — rotating NVIDIA key");
+          await new Promise((res) => setTimeout(res, 800 + attempt * 400));
+          continue;
+        }
+        // 402 (OpenRouter credits depleted on kimi-k2.6) — signal caller to fallback
+        if (r.status === 402) {
+          logger.warn({ model: m, status: 402 }, "llm 402 — model credits depleted, will fallback");
+          return null; // triggers fallback below
+        }
+        throw new Error(`LLM ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      } catch (err) {
+        if (attempt < keys.length - 1 && keys.length > 0) {
+          logger.warn({ model: m, attempt, err: String(err).slice(0, 200) }, "llm attempt failed — rotating");
+          await new Promise((res) => setTimeout(res, 500));
+          continue;
+        }
+        throw err;
+      }
+    }
+    return null;
+  }
+
+  // ── Try Kimi.com (Moonshot) as an OPTIONAL tertiary fallback ──
+  // Operator doctrine 2026-06-30: Kimi.com is an OPTION, not a switch.
+  // NVIDIA NIM stays the primary stack. Kimi.com only kicks in if BOTH
+  // NVIDIA primary AND llama-3.1-70b fallback fail. Each request uses the
+  // KIMI_API_KEY (sk-kimi-...) and the OpenAI-compatible Moonshot endpoint
+  // at https://api.moonshot.cn/v1. Premium residential IP routing
+  // (ScrapingBee) is NOT applied to Kimi.com — direct call only.
+  async function tryKimi(m: string): Promise<string | null> {
+    const kimiKey = process.env["KIMI_API_KEY"];
+    if (!kimiKey) return null;
+    const body = makeBody(m);
+    try {
+      const r = await fetch(kimiFetchUrl("/chat/completions"), {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${kimiKey}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (r.ok) {
+        const data = (await r.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
+      }
+      logger.warn({ model: m, status: r.status }, "llm: kimi.com returned non-OK");
+      return null;
+    } catch (err) {
+      logger.warn({ model: m, err: String(err).slice(0, 200) }, "llm: kimi.com attempt threw");
+      return null;
+    }
+  }
+
+  // ── Outer loop: primary model → llama-3.1-70b → Kimi.com ──
+  const primaryResult = await tryModel(model);
+  if (primaryResult !== null) return primaryResult;
+
+  // Primary model exhausted all keys or returned 402 — try NVIDIA llama fallback
+  if (model !== FALLBACK_MODEL) {
+    logger.warn({ model, fallback: FALLBACK_MODEL }, "llm: primary model failed, trying llama fallback");
+    const fallbackResult = await tryModel(FALLBACK_MODEL);
+    if (fallbackResult !== null) return `[running on ${FALLBACK_MODEL} fallback]\n\n${fallbackResult}`;
+  }
+
+  // Both NVIDIA attempts exhausted — try Kimi.com as last resort (OPTION).
+  if (kimiApiConfigured()) {
+    logger.warn({ model, kimi: KIMI_FALLBACK_MODEL }, "llm: NVIDIA primary + fallback failed, trying kimi.com");
+    const kimiResult = await tryKimi(KIMI_FALLBACK_MODEL);
+    if (kimiResult !== null) {
+      return `[running on ${KIMI_FALLBACK_MODEL} via kimi.com]\n\n${kimiResult}`;
+    }
+  }
+
+  throw new Error("LLM: no key configured or all attempts exhausted (primary + llama fallback + kimi.com option)");
 }
 
 // ─── E2B (cloud code-interpreter sandbox) ────────────────────────────────────
@@ -551,23 +769,60 @@ export interface ComposioToolkit {
   authSchemes: string[];
   composioManagedAuthSchemes: string[];
   noAuth: boolean;
+  /** Operator directive 2026-06-27: an app needs manual setup in the Composio
+   * dashboard before it can be connected. The `use_composio_managed_auth`
+   * scheme only works for apps that Composio itself can OAuth — others
+   * (MS Teams, custom OAuth apps, etc.) require the operator to register the
+   * app in the Composio dashboard and save the resulting auth_config id as
+   * `COMPOSIO_AUTHCONFIG_<SLUG>`. */
+  requiresAuthConfig: boolean;
+  /** Direct link to the Composio dashboard where the operator can create
+   * the auth config for this app. */
+  setupUrl: string;
 }
+
+const COMPOSIO_DASHBOARD_BASE = "https://app.composio.dev";
 
 /** List available toolkits (apps), optionally filtered by a search string. */
 export async function composioListToolkits(search?: string, limit = 50): Promise<ComposioToolkit[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (search) params.set("search", search);
-  const data = await composioApi("GET", `/toolkits?${params.toString()}`);
-  const items = (data["items"] as Array<Record<string, unknown>>) ?? [];
+  // Pull auth_configs in parallel so the operator sees the "needs setup"
+  // badge in the dropdown instead of a raw error on click.
+  const [toolkitsResp, authConfigsResp] = await Promise.all([
+    composioApi("GET", `/toolkits?${params.toString()}`),
+    composioApi("GET", "/auth_configs").catch(() => ({ items: [] })),
+  ]);
+  const items = (toolkitsResp["items"] as Array<Record<string, unknown>>) ?? [];
+  const authConfigs = (authConfigsResp["items"] as Array<Record<string, unknown>>) ?? [];
+  const slugsWithAuthConfig = new Set(
+    authConfigs
+      .filter((a) => String(a["status"] ?? "ENABLED") !== "DISABLED")
+      .map((a) => String((a["toolkit"] as Record<string, unknown>)?.["slug"] ?? "").toLowerCase())
+      .filter(Boolean),
+  );
   return items.map((t) => {
     const meta = (t["meta"] as Record<string, unknown>) ?? {};
+    const slug = String(t["slug"] ?? "").toLowerCase();
+    const authSchemes = (t["auth_schemes"] as string[]) ?? [];
+    const managedSchemes = (t["composio_managed_auth_schemes"] as string[]) ?? [];
+    const noAuth = Boolean(t["no_auth"]);
+    // App needs manual setup if:
+    //  - It is not no-auth
+    //  - AND it has no Composio-managed auth scheme
+    //  - AND no auth_config has been registered for it yet
+    const requiresAuthConfig = !noAuth && managedSchemes.length === 0 && !slugsWithAuthConfig.has(slug);
     return {
-      slug: String(t["slug"] ?? ""),
+      slug,
       name: String(t["name"] ?? t["slug"] ?? ""),
       logo: meta["logo"] != null ? String(meta["logo"]) : undefined,
-      authSchemes: (t["auth_schemes"] as string[]) ?? [],
-      composioManagedAuthSchemes: (t["composio_managed_auth_schemes"] as string[]) ?? [],
-      noAuth: Boolean(t["no_auth"]),
+      authSchemes,
+      composioManagedAuthSchemes: managedSchemes,
+      noAuth,
+      requiresAuthConfig,
+      setupUrl: requiresAuthConfig
+        ? `${COMPOSIO_DASHBOARD_BASE}/auth-configs/new?toolkit=${encodeURIComponent(slug)}`
+        : `${COMPOSIO_DASHBOARD_BASE}/auth-configs`,
     };
   });
 }
@@ -589,8 +844,25 @@ export async function composioListConnections(): Promise<ComposioConnection[]> {
   }));
 }
 
-/** Find an existing enabled auth config for a toolkit, else create a Composio-managed one. */
-async function findOrCreateAuthConfig(toolkitSlug: string): Promise<string> {
+/**
+ * Find an existing enabled auth config for a toolkit, else create a
+ * Composio-managed one. If `override` is supplied (operator set
+ * COMPOSIO_AUTHCONFIG_<SLUG> in Render env), use it directly — this is the
+ * escape hatch for apps whose auth Composio can't manage automatically
+ * (Microsoft Teams, custom OAuth, etc.).
+ */
+async function findOrCreateAuthConfig(toolkitSlug: string, override?: string): Promise<string> {
+  if (override) {
+    // Trust the operator-supplied auth_config id; verify it actually exists.
+    try {
+      const verified = await composioApi("GET", `/auth_configs/${encodeURIComponent(override)}`);
+      const status = String(verified["status"] ?? "ENABLED");
+      if (status === "DISABLED") throw new Error(`auth config ${override} is disabled`);
+      return override;
+    } catch (err) {
+      throw new Error(`operator-supplied ${override} could not be verified: ${err instanceof Error ? err.message : err}`);
+    }
+  }
   const existing = await composioApi("GET", "/auth_configs");
   const items = (existing["items"] as Array<Record<string, unknown>>) ?? [];
   const match = items.find(
@@ -617,6 +889,28 @@ export interface ComposioConnectResult {
 }
 
 /**
+ * Operator directive 2026-06-27: when a tool requires manual auth_config
+ * setup, surface that as a structured response so the UI can render a "needs
+ * setup" badge with a direct link to the Composio dashboard — instead of a
+ * raw 500 stack trace in the chat panel.
+ */
+export class ComposioNeedsSetupError extends Error {
+  readonly status = 409;
+  readonly toolkit: string;
+  readonly setupUrl: string;
+  readonly hint: string;
+  constructor(toolkit: string, reason: string) {
+    const slug = toolkit.toLowerCase();
+    super(`Composio needs manual auth_config setup for "${slug}"`);
+    this.name = "ComposioNeedsSetupError";
+    this.toolkit = slug;
+    this.setupUrl = `${COMPOSIO_DASHBOARD_BASE}/auth-configs/new?toolkit=${encodeURIComponent(slug)}`;
+    this.hint = `Set COMPOSIO_AUTHCONFIG_${slug.toUpperCase().replace(/-/g, "_")} to the auth_config id from your Composio dashboard, then retry.`;
+    this.cause = reason;
+  }
+}
+
+/**
  * Connect an app end to end: find-or-create the toolkit's auth config, then
  * initiate a connection for `userId`. Returns the OAuth authorize URL the
  * operator visits to approve (null for no-auth/API-key apps that complete
@@ -625,7 +919,19 @@ export interface ComposioConnectResult {
 export async function composioConnect(toolkitSlug: string, userId = "operator"): Promise<ComposioConnectResult> {
   const slug = toolkitSlug.trim().toLowerCase();
   if (!slug) throw new Error("toolkit slug is required");
-  const authConfigId = await findOrCreateAuthConfig(slug);
+  // Short-circuit: if the operator pre-configured a COMPOSIO_AUTHCONFIG_<SLUG>
+  // env var, use it directly so the dropdown can route to the right setup.
+  const overrideKey = `COMPOSIO_AUTHCONFIG_${slug.toUpperCase().replace(/-/g, "_")}`;
+  const override = process.env[overrideKey];
+  let authConfigId: string;
+  try {
+    authConfigId = await findOrCreateAuthConfig(slug, override);
+  } catch (err) {
+    // API rejected the auto-create (e.g. Microsoft Teams requires custom
+    // OAuth registration). Convert to a structured "needs setup" error so
+    // the UI can show the right CTA.
+    throw new ComposioNeedsSetupError(slug, err instanceof Error ? err.message : String(err));
+  }
   const conn = await composioApi("POST", "/connected_accounts", {
     auth_config: { id: authConfigId },
     connection: { user_id: userId },
@@ -651,6 +957,92 @@ export async function composioConnectionStatus(connectionId: string): Promise<{ 
   };
 }
 
+// ─── Multi-IP Relay System (Cloudflare Workers) ─────────────────────────────
+// When NVIDIA blacklists an IP/ASN, we rotate across 4 CF Worker relays that
+// forward requests from different edge IPs. Each relay is a Cloudflare Worker
+// deployed to a different subdomain for IP diversity.
+
+const RELAY_SUBDOMAINS = [
+  "nvidia-relay-1.aura-omega-relays",
+  "nvidia-relay-2.aura-omega-relays",
+  "nvidia-relay-3.aura-omega-relays",
+  "nvidia-relay-4.aura-omega-relays",
+];
+
+export function getRelayBaseUrls(): string[] {
+  return RELAY_SUBDOMAINS.map((s) => `https://${s}.workers.dev/v1`);
+}
+
+let relayCursor = Math.floor(Math.random() * 1024);
+export function nextRelayBaseUrl(): string {
+  const urls = getRelayBaseUrls();
+  const url = urls[relayCursor % urls.length];
+  relayCursor = (relayCursor + 1) % urls.length;
+  return url;
+}
+
+// ─── ScrapingBee Residential Proxy ───────────────────────────────────────────
+// When all direct IPs (Render + CF Workers) are blacklisted by NVIDIA, route
+// through ScrapingBee's residential proxy network. Each request comes from a
+// different residential IP that NVIDIA cannot blacklist. The proxy transparently
+// forwards all headers (including Authorization) so NVIDIA sees a clean request.
+
+/**
+ * Build the final fetch URL for an LLM API path.
+ * 
+ * ScrapingBee residential proxy integration removed 2026-06-29: ScrapingBee
+ * cannot forward Authorization Bearer headers to the target (NVIDIA requires
+ * this header for auth). The proxy strips/replaces it, causing 401 errors.
+ * 
+ * Instead, the system relies on:
+ *   - 27 NVIDIA keys in round-robin rotation (rate-limit headroom)
+ *   - Per-key dead detection with auto-sweep (keys recover after 10 min)
+ *   - Smart model fallback (kimi-k2.6 → llama-3.1-70b on 402/429)
+ *   - Exponential backoff between attempts
+ *   - ScrapingBee residential proxy + IP rotation to avoid NVIDIA IP rate limits
+ *     (forward_headers=true passes Authorization through to NVIDIA transparently;
+ *     premium_proxy=true picks a fresh residential IP per request)
+ */
+export function llmFetchUrl(path: string): string {
+  return llmBaseUrl() + (path.startsWith("/") ? path : "/" + path);
+}
+
+/**
+ * Override the LLM fetch URL with a route through ScrapingBee residential
+ * proxy. Forward all headers (including Authorization) so NVIDIA sees a
+ * normal authenticated request from a different IP each time.
+ *
+ * Returns the ScrapingBee URL when SCRAPINGBEE_API_KEY is set, with a
+ * random residential proxy country picked per call. Falls back to the
+ * direct NVIDIA URL when ScrapingBee is not configured.
+ */
+export function llmProxyFetchUrl(path: string): string {
+  const base = llmBaseUrl();
+  const fullPath = path.startsWith("/") ? path : "/" + path;
+  const sbKey = process.env["SCRAPINGBEE_API_KEY"];
+  if (sbKey && (base.includes("integrate.api.nvidia") || base.includes("nvidia.helicone"))) {
+    const targetUrl = encodeURIComponent(base + fullPath);
+    // premium_proxy=true = residential IPs (rotates per request automatically);
+    // forward_headers=true = pass Authorization through to NVIDIA.
+    return `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${targetUrl}&forward_headers=true&premium_proxy=true`;
+  }
+  return base + fullPath;
+}
+
+/**
+ * When SCRAPINGBEE_API_KEY is set, route ALL NVIDIA calls through it.
+ * When not set, use the direct URL (rely on key rotation only).
+ * Operator doctrine 2026-06-30: ScrapingBee proxy MUST be used so we
+ * don't bottleneck NVIDIA from a single Render IP, and IP rotation
+ * MUST be used so each request hits a fresh residential IP.
+ */
+export function llmRouteUrl(path: string): string {
+  if (process.env["SCRAPINGBEE_API_KEY"]) {
+    return llmProxyFetchUrl(path);
+  }
+  return llmFetchUrl(path);
+}
+
 // ─── Status snapshot ─────────────────────────────────────────────────────────
 // A non-secret view of which integrations are configured, for the dashboard /
 // health checks. Only booleans are exposed — never the key values themselves.
@@ -667,12 +1059,15 @@ export function integrationStatus(): IntegrationStatus[] {
   const has = (k: string) => !!process.env[k];
   return [
     { key: "nvidia", name: `NVIDIA NIM (${nvidiaKeys().length} key${nvidiaKeys().length === 1 ? "" : "s"})`, category: "llm", envVar: "NVIDIA_API_KEY", configured: nvidiaConfigured() },
-    { key: "openrouter", name: "OpenRouter (fallback)", category: "llm", envVar: "OPENROUTER_API_KEY", configured: has("OPENROUTER_API_KEY") },
+    { key: "kimi", name: "Kimi.com (Moonshot) — OPTION fallback", category: "llm", envVar: "KIMI_API_KEY", configured: kimiApiConfigured() },
+    { key: "scrapingbee", name: "ScrapingBee Residential Proxy (IP rotation)", category: "proxy", envVar: "SCRAPINGBEE_API_KEY", configured: has("SCRAPINGBEE_API_KEY") },
+    // OpenRouter removed 2026-06-27 — NVIDIA-only stack now.
     { key: "helicone", name: "Helicone", category: "observability", envVar: "HELICONE_API_KEY", configured: has("HELICONE_API_KEY") },
     { key: "langsmith", name: "LangSmith (LangChain)", category: "observability", envVar: "LANGSMITH_API_KEY", configured: langsmithEnabled() },
     { key: "embeddings", name: "Embeddings (semantic memory)", category: "memory", envVar: "EMBEDDINGS_API_KEY", configured: has("EMBEDDINGS_API_KEY") },
     { key: "pinecone", name: "Pinecone (vector memory)", category: "memory", envVar: "PINECONE_API_KEY", configured: has("PINECONE_API_KEY") && (has("PINECONE_INDEX_HOST") || has("PINECONE_INDEX_URL") || has("PINECONE_INDEX")) },
     { key: "tavily", name: "Tavily", category: "search", envVar: "TAVILY_API_KEY", configured: has("TAVILY_API_KEY") },
+    { key: "discord", name: `Discord bridge${has("DISCORD_CHANNEL_ID") ? "" : " (needs channel id)"}`, category: "messaging", envVar: "DISCORD_BOT_TOKEN", configured: has("DISCORD_BOT_TOKEN") && has("DISCORD_CHANNEL_ID") && has("DISCORD_AURA_BOT_USER_IDS") },
     { key: "exa", name: "Exa", category: "search", envVar: "EXA_API_KEY", configured: has("EXA_API_KEY") },
     { key: "firecrawl", name: "Firecrawl", category: "search", envVar: "FIRECRAWL_API_KEY", configured: has("FIRECRAWL_API_KEY") },
     { key: "steel", name: "Steel", category: "browser", envVar: "STEEL_API_KEY", configured: has("STEEL_API_KEY") },

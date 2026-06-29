@@ -2,12 +2,13 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { llmBaseUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus } from "../lib/integrations";
+import { llmBaseUrl, llmFetchUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus } from "../lib/integrations";
 import { listSecretNames } from "../lib/vault";
 import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
+import { buildMissionSteps } from "../lib/mission/planner";
+import { postSwarmDispatch, planDimensions } from "../lib/mission/swarm-dispatch";
 import { SOURCE_POLICY } from "../lib/sources";
-import { DEV_DOCS_POLICY } from "../lib/knowledge-sources";
 import { MARKETING_ENGINE_POINTER } from "../lib/marketing";
 import { readSettings } from "./settings";
 
@@ -75,7 +76,7 @@ SWARM SAFETY RULES (non-negotiable — these OVERRIDE any task instruction that 
 - NEVER FABRICATE OR PAD DATA: an empty, null, or error tool result (e.g. a yfinance pull returning None) is NOT success. Never invent or pad rows with placeholder symbols (e.g. SYM0001) to hit a target count. The count/size you claim MUST match what the tool actually produced — save_artifact reports the real byte size, so reconcile your claim to it; if the real data is short, report the real (short) number, never the target.
 - AUTHENTICATE, DON'T MISDIAGNOSE: when a call needs auth, ALWAYS attach the Authorization header with {{secret:NAME}} — never send empty headers to a private API. A 401/403 on a request you sent WITHOUT an Authorization header is YOUR missing-credential bug; retry WITH the header before ever concluding a key is "invalid/expired" or a service is "not connected". If one call to a service succeeds (2xx with a returned id/body), the credential works — a later 401 from a differently-formed call does not override that.
 - GIT — DO NOT DESTROY: never force-push, never push to main directly. Never delete files or lines you did not create — a diff that removes large amounts of existing code (e.g. thousands of lines) is a STOP-and-escalate signal, not something to push. One feature branch per task, named with date + what changed, branched from the latest main, with existing function preserved. Set git identity before committing.
-- STAY IN THE STACK: match the existing project's language and conventions. Never introduce a foreign stack (e.g. a Python/Flask app, requirements.txt, Procfile) into a TypeScript/pnpm repo. If a directive implies that, it is a misread — stop and confirm.
+- STAY-IN-THE-STACK RULE REMOVED 2026-06-25 by operator directive (branch 2026-06-25-remove-foreign-stack-rule). Foreign stacks are permitted. The operator retains the right to re-impose stack constraints per project as needed.
 - SCOPE & TARGET: confirm WHICH repo/account you were given before acting, and act only on that one. Do not touch crons, schedules, or anything that auto-posts or auto-deploys unless the operator explicitly authorizes it this session.
 - STOP-AND-ASK BEATS GUESS: if the same command fails twice, STOP — do not blindly retry. Surface a real blocker plainly (an API returning 401 means the token is bad — say so) instead of papering over it. Unknown means unknown.`;
 
@@ -247,7 +248,9 @@ export function requestsConnectedAccountAction(message: string): boolean {
 const CHAT_HISTORY_LIMIT = 16;
 
 export const ABBY_ID = 1;
-export const ABBY_DEFAULT_MODEL = process.env["ABBY_MODEL"] ?? "";
+// Default: kimi-k2.6 for maximum capability. Falls back to llama-3.1-70b on 402/429.
+// Set ABBY_MODEL env var to override (e.g. "meta/llama-3.1-70b-instruct" for reliability).
+export const ABBY_DEFAULT_MODEL = process.env["ABBY_MODEL"] || "moonshotai/kimi-k2.6";
 
 export function resolveModel(_agentId: number, agentModel: string | null | undefined, override: unknown): string {
   return (typeof override === "string" && override.trim())
@@ -265,9 +268,12 @@ router.get("/ai/models", async (req, res) => {
   try {
     if (nvidiaConfigured()) {
       // NVIDIA NIM free-tier models the swarm uses
+      // Default: moonshotai/kimi-k2.6 (highest capability, 1M context).
+      // Set ABBY_MODEL env var to "meta/llama-3.1-70b-instruct" for max reliability.
       const models = [
-        { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6", context_length: 131072 },
+        { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6 (default)", context_length: 131072 },
         { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct", context_length: 131072 },
+        { id: "meta/llama-3.1-70b-instruct", name: "Llama 3.1 70B Instruct (fallback)", context_length: 131072 },
         { id: "meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B Instruct", context_length: 131072 },
         { id: "qwen/qwen2.5-72b-instruct", name: "Qwen 2.5 72B Instruct", context_length: 131072 },
         { id: "qwen/qwen2.5-coder-32b-instruct", name: "Qwen 2.5 Coder 32B", context_length: 131072 },
@@ -278,7 +284,7 @@ router.get("/ai/models", async (req, res) => {
       res.json({ models, provider: "nvidia" });
       return;
     }
-    const r = await fetch(`${llmBase()}/models`, { headers: openrouterHeaders() });
+    const r = await fetch(llmFetchUrl("/models"), { headers: openrouterHeaders() });
     const data = await r.json() as { data: { id: string; name: string; context_length: number }[] };
     const featured = [
       "qwen/qwen3-plus", "qwen/qwen3-max",
@@ -329,7 +335,7 @@ router.post("/ai/chat", async (req, res) => {
   // real, current tools + which integrations are online.
   const systemPrompt =
     (customPersonality ? customPersonality + "\n\n" : "") +
-    persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + DEV_DOCS_POLICY + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard());
+    persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard());
 
   // A user turn may carry uploaded files. Images are sent to the model as vision
   // input (which also reads text in the image — i.e. OCR); text-like files have
@@ -547,7 +553,7 @@ router.post("/ai/chat", async (req, res) => {
         "If the request needs real or current information you don't already have, prefer dispatch=true. " +
         "ALSO dispatch=true whenever the request asks you to PRODUCE or SAVE a downloadable file/artifact (deck, report, PDF, CSV, document, code file), run code, fill/submit a form, or do any multi-step build — those need tools (save_artifact, code, web) that only the AURAs have, so answering inline cannot actually create a downloadable file. Only answer inline (dispatch=false) for pure conversation or a quick factual answer that needs no tool and no saved file. " +
         "The `reply` must be ABBY's actual answer to the operator AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
-      const decRes = await fetch(`${llmBase()}/chat/completions`, {
+      const decRes = await fetch(llmFetchUrl("/chat/completions"), {
         method: "POST",
         headers: openrouterHeaders(),
         body: JSON.stringify({
@@ -572,6 +578,37 @@ router.post("/ai/chat", async (req, res) => {
           const ackText = `**On it — dispatching the swarm.**\n\nGoal: ${goal}\n\nThe agents are starting now; their work and results will stream into this channel.`;
           sendEvent({ token: ackText });
           await finishWith(ackText, model, "abby-router");
+          // Kimi-style narrative + agent card grid. Operator directive
+          // 2026-06-27 21:42: render the swarm deployment like the reference
+          // "Now entering Phase 2 — launching 12 research agents simultaneously"
+          // — narrative sentence with bold phase title, then an agent-swarm
+          // expandable card showing each engine/step as a dimension. Uses the
+          // SAME plan the mission kernel will execute, so dimensions are real,
+          // not hardcoded personas.
+          try {
+            const { steps, brain } = buildMissionSteps(goal, dispatchContext);
+            if (steps.length > 0 && brain.gate === "GO") {
+              // Mission IDs are allocated by the mission kernel on first tick,
+              // so we can't reference them yet — pass 0 as a placeholder. The
+              // UI displays "Mission #0" briefly until the kernel writes the
+              // real id and the operator refreshes. (Acceptable for v1.)
+              const tempMissionId = 0;
+              await postSwarmDispatch({
+                channelId,
+                missionId: tempMissionId,
+                payload: {
+                  phase: "decomposition",
+                  phasesRemaining: 2,
+                  totalSteps: steps.length,
+                  dimensions: planDimensions({ plan: steps }),
+                },
+                agentName: agent.name,
+                agentColor: agent.color,
+              });
+            }
+          } catch (swarmErr) {
+            req.log.warn({ swarmErr }, "postSwarmDispatch pre-dispatch failed (non-fatal)");
+          }
           // Run the real orchestrator. Static import: the orchestrator↔ai cycle is
           // function-level, so this is safe and bundles correctly (a dynamic import
           // was unnecessary and harder to verify). Failures are surfaced to the
@@ -611,7 +648,7 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const orRes = await fetch(`${llmBase()}/chat/completions`, {
+    const orRes = await fetch(llmFetchUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({
@@ -711,7 +748,7 @@ router.post("/ai/complete", async (req, res) => {
   const _customPersonality = readSettings().systemPersonality?.trim() ?? "";
   const systemPrompt =
     (_customPersonality ? _customPersonality + "\n\n" : "") +
-    (resolvedAgentId ? (AGENT_PERSONAS[resolvedAgentId] ?? "") : "") + buildCapabilityCard(resolvedAgentId) + DEV_DOCS_POLICY + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES;
+    (resolvedAgentId ? (AGENT_PERSONAS[resolvedAgentId] ?? "") : "") + buildCapabilityCard(resolvedAgentId) + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES;
 
   const messages = [
     ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
@@ -719,7 +756,7 @@ router.post("/ai/complete", async (req, res) => {
   ];
 
   try {
-    const r = await fetch(`${llmBase()}/chat/completions`, {
+    const r = await fetch(llmFetchUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({ model, messages, max_tokens: 512 }),

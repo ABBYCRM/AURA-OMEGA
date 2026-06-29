@@ -47,8 +47,68 @@ import {
   sanitizeForStorage,
   type ToolContext,
 } from "./tools";
-import { sendInngestEvent, traceLlmRun, llmBaseUrl } from "./lib/integrations";
+import { sendInngestEvent, traceLlmRun, llmBaseUrl, llmFetchUrl, llmRouteUrl, completeChat } from "./lib/integrations";
 import { groundingProof } from "./lib/grounding";
+import { recordOutcome } from "./lib/hermes";
+import {
+  canonicalJson,
+  checkToolPayloadBudget,
+  ensureFinalAnswer,
+  hasUnexpectedScript,
+  installFinalAnswerCrashGuard,
+  sanitizeFinalOutput,
+  toolCallKey,
+  verifyArtifactDelivery,
+} from "./lib/runtimeGuards";
+import { runEvidenceGate } from "./lib/evidence-gate";
+
+// Install a process-wide finalAnswer default at module load. Prevents the
+// `finalAnswer` ReferenceError if a code path exits before assigning it.
+installFinalAnswerCrashGuard();
+
+// ─── Process-local dedupe of postMessage calls ─────────────────────────────────
+// Operator-visible channel messages get keyed by (channelId, agentId/agentName,
+// messageType, content-hash). A second call with the same key in this process
+// returns without inserting a duplicate row.
+const postedMessageKeys = new Set<string>();
+function stableMessageKey(opts: {
+  channelId: number;
+  agentId?: number | null;
+  agentName?: string | null;
+  messageType: string;
+  content: string;
+}): string {
+  const agentPart = opts.agentId != null ? `id:${opts.agentId}` : `name:${(opts.agentName ?? "").trim().toLowerCase()}`;
+  return `${opts.channelId}|${agentPart}|${opts.messageType}|${canonicalJson({ c: opts.content })}`;
+}
+
+// ─── Vague-goal clarification gate ─────────────────────────────────────────────
+// Single source of truth for "this goal needs operator input, not swarm work".
+// Posted exactly once per orchestrateGoal call.
+const VAGUE_GOAL_PATTERN = /^(\s*(report|make report|build report|analy[sz]e|help|do it|do the thing|what now|huh|fix it|figure it out|handle it|take care of it)\s*[.?!]?\s*)$/i;
+
+function isVagueGoal(goal: string, sourceContext?: string | null): boolean {
+  if (sourceContext && sourceContext.trim().length > 32) return false;
+  const g = goal.trim();
+  if (g.length === 0) return true;
+  if (VAGUE_GOAL_PATTERN.test(g)) return true;
+  if (g.length < 14 && !/\b(make|create|generate|build|write|run|search|find|scrape|send|post|publish|delete|update|call|invoke|deploy|open|push|merge|close|schedule|launch|start|stop|test|verify|analy[sz]e|extract|parse|list|show|describe|explain|compare|map)\b/i.test(g)) {
+    return true;
+  }
+  return false;
+}
+
+const CLARIFICATION_PROMPT =
+  "Give me the report topic, purpose, audience, format, sources, length, and deadline.";
+
+// ─── Skipped-directive detection ───────────────────────────────────────────────
+// When ABBY's plan or a directive contains skip language, we refuse to dispatch
+// an agent command for that directive and only record an audit row.
+const SKIP_DIRECTIVE_PATTERN = /\b(NO\s*-\s*|SKIP\b|ROLE\s+CLARIFICATION\b|not\s+required\b|do\s+not\s+execute\b|do\s+not\s+run\b|skip\s+this\b|not\s+needed\b)/i;
+
+function shouldSkipDirective(directive: string): boolean {
+  return SKIP_DIRECTIVE_PATTERN.test(directive);
+}
 
 type Agent = typeof agentsTable.$inferSelect;
 
@@ -141,40 +201,10 @@ export async function reconcileStaleWork(): Promise<void> {
  * defaults to a small budget (planning/review emit short JSON), but callers that
  * produce the operator-facing deliverable (final synthesis) pass a larger budget
  * so a 10/10 answer isn't truncated.
+ *
+ * Implementation lives in lib/integrations.ts so other modules (notably Hermes)
+ * can call the same LLM path with the same routing + tracing.
  */
-async function completeChat(model: string, system: string, user: string, maxTokens = 800): Promise<string> {
-  const startedAt = new Date();
-  let r: Response;
-  try {
-    r = await fetch(`${llmBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: openrouterHeaders(),
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        stream: false,
-        max_tokens: maxTokens,
-      }),
-    });
-  } catch (err) {
-    traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: String(err) });
-    throw err;
-  }
-  if (!r.ok) {
-    const errText = (await r.text()).slice(0, 200);
-    traceLlmRun({ name: "completeChat", model, input: { system, user }, output: null, startedAt, error: `LLM ${r.status}: ${errText}` });
-    throw new Error(`LLM ${r.status}: ${errText}`);
-  }
-  const data = (await r.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const out = data?.choices?.[0]?.message?.content?.trim() || "(no response)";
-  traceLlmRun({ name: "completeChat", model, input: { system, user }, output: out, startedAt });
-  return out;
-}
 
 // ─── Native tool-calling primitives ─────────────────────────────────────────
 
@@ -210,7 +240,7 @@ async function completeChatTurn(
     body["tools"] = tools;
     body["tool_choice"] = "auto";
   }
-  let r = await fetch(`${llmBaseUrl()}/chat/completions`, {
+  let r = await fetch(llmRouteUrl("/chat/completions"), {
     method: "POST",
     headers: openrouterHeaders(),
     body: JSON.stringify(body),
@@ -219,7 +249,7 @@ async function completeChatTurn(
     // Some providers reject function-calling — retry once without tools.
     delete body["tools"];
     delete body["tool_choice"];
-    r = await fetch(`${llmBaseUrl()}/chat/completions`, {
+    r = await fetch(llmRouteUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify(body),
@@ -247,6 +277,17 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .slice(0, 160);
 }
 
+// Loop-guard thresholds. These are soft limits: a smart agent that legitimately
+// needs to retry the same call with the same args (e.g. after fixing an auth
+// header) can do so up to N times. Beyond N, the orchestrator forces the agent
+// to STOP and report — it is stuck and the operator should investigate.
+//
+//   MAX_CONSECUTIVE_SAME_CALL = how many identical tool calls in a row we
+//     tolerate before we cut the run. 3 matches the dedup message ("you
+//     already called this — use it or pick a different tool") that the agent
+//     is ignoring.
+const MAX_CONSECUTIVE_SAME_CALL = 3;
+
 const URL_RE = /https?:\/\/[^\s"')<>]+/i;
 function extractUrl(text: string): string | null {
   return text.match(URL_RE)?.[0] ?? null;
@@ -269,14 +310,77 @@ async function postMessage(opts: {
   content: string;
   messageType: string;
 }): Promise<void> {
+  // Process-local dedupe: same channel + agent + messageType + content hash
+  // is suppressed (no DB insert, no operator-visible duplicate).
+  const key = stableMessageKey({
+    channelId: opts.channelId,
+    agentId: opts.agent?.id ?? opts.agentId ?? null,
+    agentName: opts.agent?.name ?? opts.agentName ?? null,
+    messageType: opts.messageType,
+    content: opts.content,
+  });
+  if (postedMessageKeys.has(key)) {
+    logger.debug({ key, messageType: opts.messageType }, "postMessage dedupe hit");
+    return;
+  }
+  postedMessageKeys.add(key);
+  // Evidence gate (operator directive 2026-06-27 18:46): never persist raw
+  // tool-call markup or malformed JSON to the operator chat stream. If the
+  // upstream assistant output leaked provider tool tokens, log + drop the
+  // message and return a corrective error to the model so it retries.
+  const gate = runEvidenceGate(opts.content);
+  if (gate.blocked) {
+    logger.warn(
+      {
+        messageType: opts.messageType,
+        patterns: gate.toolCallMarkupFound,
+        fragment: opts.content.slice(0, 200),
+      },
+      "evidence gate blocked: tool-call markup leaked into operator output",
+    );
+    return; // do NOT save the contaminated content
+  }
+  // Persist the sanitized text + (if the answer was over the safe UI length
+  // OR truncated mid-sentence) post a separate executive summary message so
+  // the operator still sees the headline finding.
+  const persistedContent = gate.safeText || opts.content;
   await db.insert(messagesTable).values({
     channelId: opts.channelId,
     agentId: opts.agent?.id ?? opts.agentId ?? null,
     agentName: opts.agent?.name ?? opts.agentName ?? null,
     agentColor: opts.agent?.color ?? opts.agentColor ?? null,
-    content: opts.content,
+    content: persistedContent,
     messageType: opts.messageType,
   });
+  if (gate.autoArtifact.shouldArtifact && gate.executiveSummary) {
+    postedMessageKeys.add(stableMessageKey({
+      channelId: opts.channelId,
+      agentId: opts.agent?.id ?? opts.agentId ?? null,
+      agentName: opts.agent?.name ?? opts.agentName ?? null,
+      messageType: "executive_summary",
+      content: gate.executiveSummary,
+    }));
+    await db.insert(messagesTable).values({
+      channelId: opts.channelId,
+      agentId: opts.agent?.id ?? opts.agentId ?? null,
+      agentName: opts.agent?.name ?? opts.agentName ?? null,
+      agentColor: opts.agent?.color ?? opts.agentColor ?? null,
+      content: `[Full report auto-saved as artifact — showing executive summary]\n\n${gate.executiveSummary}`,
+      messageType: "executive_summary",
+    });
+  }
+  if (gate.malformedJson.length > 0) {
+    logger.warn(
+      { count: gate.malformedJson.length, first: gate.malformedJson[0] },
+      "evidence gate: malformed JSON detected in assistant output",
+    );
+  }
+  if (gate.pricingConfusion.length > 0) {
+    logger.warn(
+      { count: gate.pricingConfusion.length, sentences: gate.pricingConfusion },
+      "evidence gate: CPC/CPL unit confusion detected — review synthesis",
+    );
+  }
 }
 
 // ─── Single-command execution ────────────────────────────────────────────────
@@ -402,6 +506,7 @@ export async function executeAgentCommand(opts: {
     // (tool + exact args) call reuses its result instead of re-billing the
     // external API and re-spending tokens — a frequent, costly agent loop.
     const callCache = new Map<string, string>();
+    const callHistory: string[] = []; // ordered log of call keys for loop detection
     while (steps < MAX_AGENT_STEPS) {
       steps++;
       const assistant = await completeChatTurn(model, messages, tools);
@@ -450,42 +555,104 @@ export async function executeAgentCommand(opts: {
       for (const { call, args: parsedArgs, truncated } of parsed) {
         const name = call.function?.name ?? "unknown";
 
-        const [tc] = await db
-          .insert(toolCallsTable)
-          .values({ agentId: agent.id, toolName: name, args: JSON.stringify(parsedArgs).slice(0, 2000), status: "running" })
-          .returning();
+        let toolResult: string;
+        let ok = true;
+        let auditStatus: "running" | "success" | "error" | "deduped" = "running";
+        const callKey = toolCallKey(commandId, name, parsedArgs);
+        let isReusedAudit = false;
+
+        // Action monologue line: emitted once per call, before we decide
+        // whether the call is fresh, deduplicated, or rejected by the payload
+        // budget. Gives the operator dashboard a visible "agent acted" trace.
         await db.insert(monologueLinesTable).values({
           agentId: agent.id,
           text: `${name}(${summarizeArgs(parsedArgs)})`,
           type: "action",
         });
 
-        let toolResult: string;
-        let ok = true;
-        const callKey = `${name}:${JSON.stringify(parsedArgs)}`;
         if (truncated) {
           // The model's arguments were truncated/invalid JSON (usually too large
           // for one turn). Don't run with empty args — tell it to retry smaller.
           ok = false;
+          auditStatus = "error";
           toolResult = `error: your ${name} call was dropped — its arguments were truncated/invalid JSON, almost always because the content was too large for a single turn. Retry ${name} with smaller arguments: write the file/code in sections, or shorten the payload.`;
         } else if (callCache.has(callKey)) {
           // Identical call already executed this run — reuse it, don't pay again.
+          ok = true;
+          isReusedAudit = true;
+          auditStatus = "deduped";
           toolResult = `(deduplicated: you already called ${name} with these exact arguments earlier in this run. Reusing that result — do not repeat it. Use it, or call a different tool / different arguments.)\n\n${callCache.get(callKey)}`;
         } else {
-          try {
-            toolResult = await runTool(name, parsedArgs, ctx);
-            if (toolResult.startsWith("error:")) ok = false;
-          } catch (e) {
+          // Payload budget check BEFORE runTool — refuse oversized args so the
+          // upstream API doesn't truncate / drop / 413 us mid-flight. The agent
+          // gets a chunk-the-operation error it can act on.
+          const budget = checkToolPayloadBudget(name, parsedArgs);
+          if (!budget.ok) {
             ok = false;
-            toolResult = `error: ${String(e).slice(0, 300)}`;
+            auditStatus = "error";
+            toolResult = budget.error;
+            callHistory.push(callKey);
+            const [tc] = await db
+              .insert(toolCallsTable)
+              .values({ agentId: agent.id, toolName: name, args: JSON.stringify(parsedArgs).slice(0, 2000), status: "error", result: toolResult.slice(0, 4000), completedAt: new Date() })
+              .returning();
+            await db.insert(monologueLinesTable).values({
+              agentId: agent.id,
+              text: `${name} rejected: ${budget.error.slice(0, 200)}`,
+              type: "system",
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              name,
+              content: toolResult,
+            });
+            continue;
           }
-          if (ok) callCache.set(callKey, toolResult);
+          // Loop guard: count how many of THIS agent's recent consecutive calls
+          // are identical. After MAX_CONSECUTIVE_SAME_CALL hits we cut the run
+          // and tell the agent it is stuck — the operator needs to inspect the
+          // failure, not let the agent keep racking up identical requests that
+          // return the same error every time. This protects both cost and the
+          // upstream service we're hammering (e.g. Tavily, Composio, GitHub).
+          let recentSame = 0;
+          for (let i = callHistory.length - 1; i >= 0; i--) {
+            if (callHistory[i] === callKey) recentSame++;
+            else break;
+          }
+          if (recentSame >= MAX_CONSECUTIVE_SAME_CALL) {
+            ok = false;
+            toolResult = `error: loop guard — you have called ${name} with these EXACT arguments ${recentSame + 1} times in a row and each call returned the same result. You are stuck. STOP calling this tool. Switch tools, change your arguments, or report a final answer to the operator describing what you tried and what blocked you. The orchestrator is closing this directive.`;
+            callHistory.push(callKey); // record so subsequent identical calls stay blocked
+          } else {
+            try {
+              toolResult = await runTool(name, parsedArgs, ctx);
+              if (toolResult.startsWith("error:")) ok = false;
+            } catch (e) {
+              ok = false;
+              toolResult = `error: ${String(e).slice(0, 300)}`;
+            }
+            callHistory.push(callKey);
+            if (ok) callCache.set(callKey, toolResult);
+          }
         }
 
-        await db
-          .update(toolCallsTable)
-          .set({ status: ok ? "success" : "error", result: toolResult.slice(0, 4000), completedAt: new Date() })
-          .where(eq(toolCallsTable.id, tc.id));
+        // Audit row: insert for new runs, skip for deduped (no new execution),
+        // status reflects outcome.
+        if (isReusedAudit) {
+          // The cached result row already exists; no new insert, no duplicate
+          // tool_output post. Push the result into messages so the LLM can
+          // continue reasoning, but do NOT spam the operator channel.
+          messages.push({ role: "tool", tool_call_id: call.id, name, content: toolResult.slice(0, 6000) });
+          continue;
+        }
+        const [tc] = await db
+          .insert(toolCallsTable)
+          .values({ agentId: agent.id, toolName: name, args: JSON.stringify(parsedArgs).slice(0, 2000), status: auditStatus, result: toolResult.slice(0, 4000), completedAt: new Date() })
+          .returning();
+        // Keep tc.id used downstream for legacy update callers; nothing else
+        // references it now that the update was folded into the insert.
+        void tc;
         await db.insert(monologueLinesTable).values({
           agentId: agent.id,
           text: ok ? `${name} → ${toolResult.slice(0, 200)}` : `${name} failed: ${toolResult.slice(0, 200)}`,
@@ -631,6 +798,36 @@ async function dispatchDirectives(
   const runs = directives.map(async (d): Promise<{ name: string; result: string } | null> => {
     const agent = auras.find((c) => c.id === d.agentId);
     if (!agent) return null;
+
+    // Skip-directive guard: if the directive itself is a NO-/SKIP/ROLE
+    // CLARIFICATION/role-rejection line, do NOT create an agent command,
+    // do NOT run tools for it, and do NOT dispatch a result. Record an
+    // audit row only if the schema accepts a "skipped" status (it does via
+    // the agent_commands.status enum); otherwise just omit.
+    if (shouldSkipDirective(d.directive)) {
+      try {
+        await db.insert(agentCommandsTable).values({
+          fromAgentId: ABBY_ID,
+          toAgentId: agent.id,
+          command: d.directive,
+          payload: null,
+          priority,
+          status: "skipped",
+        });
+      } catch {
+        // If the schema disallows "skipped", just omit the audit row.
+      }
+      await postMessage({
+        channelId,
+        agentId: ABBY_ID,
+        agentName: "ABBY",
+        agentColor: abby?.color ?? ABBY_COLOR,
+        content: `→ ${agent.name}: SKIPPED — directive is a no-op / role clarification. No tools will run for this AURA.`,
+        messageType: "system",
+      }).catch(() => {});
+      return { name: agent.name, result: "(skipped: directive was a NO-/SKIP/role-clarification line)" };
+    }
+
     const [cmd] = await db
       .insert(agentCommandsTable)
       .values({
@@ -677,8 +874,46 @@ export async function orchestrateGoal(opts: {
   forceAgentId?: number;
 }): Promise<void> {
   const { goal, channelId, priority, sourceContext, forceAgentId } = opts;
+  const startedAt = new Date();
+  // Declare finalAnswer at the top of the function so every exit path (early
+  // return on clarification, swarm paused, no directives, post-dispatch catch,
+  // etc.) has a defined value to pass to recordOutcome() and ensureFinalAnswer().
+  // Combined with the runtimeGuards installFinalAnswerCrashGuard() at module
+  // load, this means a ReferenceError on `finalAnswer` is no longer possible.
+  let finalAnswer = "";
+  let didPostFinalAnswer = false;
   logger.info({ phase: "abby-planning", ...groundingProof(sourceContext) }, "orchestration grounding");
   void sendInngestEvent("swarm/goal.received", { goal, channelId, priority });
+
+  // ── Vague-goal clarification gate ──
+  // Generic one-word goals ("report", "help", "do it") with no sourceContext
+  // cannot be decomposed into actionable AURA directives. Post ONE consolidated
+  // clarification and return — do NOT spin up the swarm, do NOT create artifact
+  // files, do NOT repeatedly call memory_search.
+  if (isVagueGoal(goal, sourceContext)) {
+    await postMessage({
+      channelId,
+      agentId: ABBY_ID,
+      agentName: "ABBY",
+      agentColor: ABBY_COLOR,
+      content: `Clarification needed before I dispatch the swarm.\n\n${CLARIFICATION_PROMPT}\n\n(Your goal "${goal.trim()}" doesn't tell me what to do — give me specifics and I'll run the full swarm.)`,
+      messageType: "agent",
+    }).catch((err) => logger.warn({ err }, "vague-goal clarification post failed"));
+    void sendInngestEvent("swarm/goal.clarification_requested", { goal, channelId, reason: "vague" });
+    void recordOutcome({
+      goal,
+      channelId,
+      outcome: "interrupted",
+      auraReports: [],
+      toolCalls: [],
+      finalAnswer: ensureFinalAnswer("", [`Clarification requested for vague goal: "${goal.trim()}".`]),
+      durationMs: undefined,
+      startedAt,
+      completedAt: new Date(),
+    });
+    return;
+  }
+
   try {
     const agents = await db.select().from(agentsTable);
     const abby = agents.find((a) => a.id === ABBY_ID) ?? null;
@@ -829,7 +1064,6 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       const synthUser = `Operator goal: "${goal}"\n\nEach AURA's final reported work — present and attribute ALL of it (Discovery), then turn it into recommendations and next steps (Application):\n${results
         .map((r) => `### ${r.name}\n${r.result.slice(0, 3000)}`)
         .join("\n\n")}\n\nWrite your final orchestrator briefing for the operator now — direct answer first, then each AURA's attributed discovery, then the application (recommendations + next steps). Peer-to-peer voice.`;
-      let finalAnswer = "";
       try {
         // Generous budget: this is the operator-facing deliverable, so it must
         // not be truncated the way an 800-token planning call would be.
@@ -840,8 +1074,19 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       await db.update(agentsTable).set({ status: "idle" }).where(eq(agentsTable.id, ABBY_ID));
       // Fallback: never post a bare status line — if synthesis yields nothing,
       // hand back the raw AURA results so the operator still gets the answer.
-      if (!finalAnswer) {
-        finalAnswer = results.map((r) => `**${r.name}:**\n${r.result.slice(0, 1500)}`).join("\n\n");
+      // Use ensureFinalAnswer() so even an empty model output produces a
+      // non-empty final answer string (the runtimeGuards contract).
+      finalAnswer = ensureFinalAnswer(finalAnswer, [
+        results.map((r) => `**${r.name}:**\n${r.result.slice(0, 1500)}`).join("\n\n"),
+      ]);
+      // Output sanitation gate: detect CJK / known contamination fragments,
+      // fall back to raw AURA results if the synthesis is contaminated.
+      if (hasUnexpectedScript(finalAnswer, "en")) {
+        logger.warn({ goal }, "final answer contained unexpected script — falling back to raw AURA results");
+        const fallback = results.map((r) => `**${r.name}:**\n${r.result.slice(0, 1500)}`).join("\n\n");
+        finalAnswer = `UNVERIFIED_OUTPUT_CONTAMINATION: synthesis stream contained unexpected script. Showing raw AURA results instead:\n\n${sanitizeFinalOutput(fallback)}`;
+      } else {
+        finalAnswer = sanitizeFinalOutput(finalAnswer);
       }
       await postMessage({
         channelId,
@@ -851,6 +1096,7 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
         content: finalAnswer,
         messageType: "agent",
       });
+      didPostFinalAnswer = true;
     }
     void sendInngestEvent("swarm/goal.completed", {
       goal,
@@ -858,9 +1104,54 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       auraReports: results.length,
       results: results.map((r) => ({ name: r.name, result: r.result.slice(0, 500) })),
     });
+
+    // Hermes runtime hook — record this session for closed-loop learning.
+    // Best-effort; never throws, never blocks the operator reply.
+    // outcome status is mapped HONESTLY from observable facts:
+    //   success  — final answer posted and no critical deliverable failed
+    //   partial  — content exists but artifact/tool verification failed
+    //   failed   — no useful answer exists
+    //   interrupted — explicit early-return paths (clarification, pause, error)
+    const outcome: "success" | "partial" | "failed" | "interrupted" =
+      didPostFinalAnswer
+        ? (finalAnswer.includes("UNVERIFIED_OUTPUT_CONTAMINATION") ? "partial" : "success")
+        : results.length > 0
+          ? "partial"
+          : "failed";
+    void recordOutcome({
+      goal,
+      channelId,
+      outcome,
+      auraReports: results.map((r) => ({
+        agentId: 0,
+        name: r.name,
+        result: r.result,
+        toolCalls: [],
+      })),
+      toolCalls: [],
+      finalAnswer: ensureFinalAnswer(finalAnswer),
+      durationMs: undefined,
+      startedAt: startedAt,
+      completedAt: new Date(),
+    });
   } catch (err) {
     logger.error({ err }, "orchestrateGoal failed");
     void sendInngestEvent("swarm/goal.failed", { goal, channelId, error: String(err).slice(0, 300) });
+    const errorAnswer = ensureFinalAnswer("", [
+      `Orchestration error: ${String(err).slice(0, 300)}`,
+      `Operator goal was: "${goal.trim()}"`,
+    ]);
+    void recordOutcome({
+      goal,
+      channelId,
+      outcome: "failed",
+      auraReports: [],
+      toolCalls: [],
+      finalAnswer: errorAnswer,
+      durationMs: undefined,
+      startedAt,
+      completedAt: new Date(),
+    });
     await db
       .update(agentsTable)
       .set({ status: "idle" })
@@ -871,7 +1162,7 @@ Otherwise respond with ONLY a JSON array (no prose, no code fences) of up to 2 f
       agentId: ABBY_ID,
       agentName: "ABBY",
       agentColor: ABBY_COLOR,
-      content: `Orchestration error: ${String(err).slice(0, 300)}`,
+      content: errorAnswer,
       messageType: "system",
     }).catch(() => {});
   }
