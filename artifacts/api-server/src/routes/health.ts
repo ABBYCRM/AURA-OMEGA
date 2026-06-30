@@ -13,7 +13,7 @@ router.get("/healthz", (_req, res) => {
 // Debug: dump env vars (no secrets exposed — only lengths and prefixes)
 // Mounted under /healthz so it bypasses auth.
 router.get("/env", (_req, res) => {
-  const keys = ['DATABASE_URL', 'NVIDIA_API_KEY', 'NVIDIA_API_KEYS', 'DEPLOY_VERSION', 'SCRAPINGBEE_API_KEY', 'ABBY_MODEL', 'PORT', 'NODE_ENV'];
+  const keys = ['DATABASE_URL', 'NVIDIA_API_KEY', 'NVIDIA_API_KEYS', 'DEPLOY_VERSION', 'SCRAPINGBEE_API_KEY', 'KIMI_API_KEY', 'ABBY_MODEL', 'PORT', 'NODE_ENV'];
   const result: Record<string, { len: number; prefix: string }> = {};
   for (const k of keys) {
     const v = process.env[k];
