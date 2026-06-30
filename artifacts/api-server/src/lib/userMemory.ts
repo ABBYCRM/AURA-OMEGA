@@ -20,7 +20,7 @@ import { db } from "@workspace/db";
 import { agentMemoryTable } from "@workspace/db";
 import { desc, eq, and, ilike } from "drizzle-orm";
 import { embed, embeddingsConfigured, cosineSimilarity, parseEmbedding } from "./embeddings";
-import { llmFetchUrl, llmHeaders, nvidiaConfigured } from "./integrations";
+import { llmRouteUrl, llmHeaders, nvidiaConfigured } from "./integrations";
 
 const PROFILE_KEY = "user_profile";
 const SIM_DEDUP_THRESHOLD = 0.88; // skip storing fact if this similar to existing
@@ -37,7 +37,7 @@ function channelTag(channelId: number): string {
 async function nimExtract(transcript: string): Promise<string[]> {
   if (!nvidiaConfigured()) return [];
 
-  const url = llmFetchUrl("/chat/completions");
+  const url = llmRouteUrl("/chat/completions");
   let raw: Response;
   try {
     raw = await fetch(url, {

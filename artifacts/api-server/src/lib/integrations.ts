@@ -174,19 +174,27 @@ export function llmBaseUrl(): string {
  * Unified LLM auth + content headers.
  * Priority: NVIDIA NIM (when keys available) → Kimi.com primary → Kimi.com fallback.
  */
+// x-relay-token is required by DO relays; CF Workers ignore unknown headers.
+// Inject whenever RELAY_AUTH_TOKEN is present and Helicone/Kimi are not proxying.
+function relayTokenHeader(): Record<string, string> {
+  const token = process.env["RELAY_AUTH_TOKEN"];
+  return token ? { "x-relay-token": token } : {};
+}
+
 export function llmHeaders(extra?: Record<string, string>): Record<string, string> {
-  // Kimi PRIMARY path — no NVIDIA key needed.
+  // Kimi PRIMARY path — no NVIDIA key needed, no relay.
   if (kimiPrimary()) {
     const kimiKey = process.env["KIMI_API_KEY"]!;
     return { "Authorization": `Bearer ${kimiKey}`, "Content-Type": "application/json", ...extra };
   }
-  // NVIDIA path.
+  // NVIDIA path — include relay token so DO relays accept the request.
   const nvidiaKey = nextNvidiaKey();
   if (nvidiaKey) {
     return {
       "Authorization": `Bearer ${nvidiaKey}`,
       "Content-Type": "application/json",
       ...heliconeHeaders(),
+      ...relayTokenHeader(),
       ...extra,
     };
   }
@@ -490,9 +498,12 @@ export async function completeChat(
           logger.warn({ model: m, status: 404 }, "llm 404 — model not found, triggering model fallback");
           return null;
         }
-        // 429/401 — rotate key and retry
+        // 429/401 — rotate both key AND relay so the next attempt goes through
+        // a different IP; gives the per-minute quota window time to roll over.
         if ((r.status === 429 || r.status === 401) && keys.length > 0 && attempt < keys.length - 1) {
-          logger.warn({ model: m, attempt, status: r.status }, "llm 429/401 — rotating NVIDIA key");
+          logger.warn({ model: m, attempt, status: r.status }, "llm 429/401 — rotating key + relay");
+          const relayCount = getRelayBaseUrls().length;
+          if (relayCount > 0) relayCursor = (relayCursor + 1 + Math.floor(Math.random() * 3)) % relayCount;
           await new Promise((res) => setTimeout(res, 800 + attempt * 400));
           continue;
         }
@@ -1007,7 +1018,7 @@ const CF_RELAY_SUBDOMAINS = [
   "nvidia-relay-4.aura-omega-relays",
 ];
 
-// DO relay IPs injected via env — set DO_RELAY_IPS=ip1,ip2 in Render
+// DO relay IPs injected via env — set DO_RELAY_IPS=ip1,ip2,... in Render
 function getDoRelayUrls(): string[] {
   const raw = process.env["DO_RELAY_IPS"] ?? "161.35.4.225,134.199.214.225";
   return raw.split(",").map((ip) => `http://${ip.trim()}:8080`);
@@ -1015,8 +1026,12 @@ function getDoRelayUrls(): string[] {
 
 export function getRelayBaseUrls(): string[] {
   const cf = CF_RELAY_SUBDOMAINS.map((s) => `https://${s}.workers.dev/v1`);
-  const doRelays = getDoRelayUrls().map((u) => `${u}/v1`);
-  return [...cf, ...doRelays]; // interleaved in rotation
+  // Only include DO relays when RELAY_AUTH_TOKEN is configured — without it
+  // the relay will reject every request with 401, wasting retry budget.
+  const doRelays = process.env["RELAY_AUTH_TOKEN"]
+    ? getDoRelayUrls().map((u) => `${u}/v1`)
+    : [];
+  return [...cf, ...doRelays];
 }
 
 let relayCursor = Math.floor(Math.random() * 1024);
@@ -1058,9 +1073,18 @@ export function buildScrapingBeeUrl(targetUrl: string, renderJs = false): string
   return `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${encodeURIComponent(targetUrl)}&premium_proxy=true&render_js=${renderJs}`;
 }
 
-/** Always direct — ScrapingBee is not used for NVIDIA calls. */
+/**
+ * LLM request URL, routing through the relay pool for IP diversity.
+ * Helicone and Kimi bypass the relay (Helicone is already a proxy;
+ * Kimi goes to api.moonshot.cn which has its own routing).
+ * Falls back to direct if the relay pool is empty.
+ */
 export function llmRouteUrl(path: string): string {
-  return llmFetchUrl(path);
+  if (heliconeEnabled() || kimiPrimary()) return llmFetchUrl(path);
+  const urls = getRelayBaseUrls();
+  if (urls.length === 0) return llmFetchUrl(path);
+  const base = nextRelayBaseUrl();
+  return base + (path.startsWith("/") ? path : "/" + path);
 }
 
 // ─── Status snapshot ─────────────────────────────────────────────────────────

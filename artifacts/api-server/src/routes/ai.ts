@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { llmBaseUrl, llmFetchUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel } from "../lib/integrations";
+import { llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel } from "../lib/integrations";
 import { extractAndStoreUserFacts, getUserProfile } from "../lib/userMemory";
 import { getScratchpad } from "./scratchpad";
 import { listSecretNames } from "../lib/vault";
@@ -667,7 +667,7 @@ router.post("/ai/chat", async (req, res) => {
         '{"dispatch": true|false, "goal": "<self-contained instruction for the swarm; required if dispatch=true>", "reply": "<your conversational answer; required if dispatch=false>"}. ' +
         "dispatch=false ONLY for: greetings (hello, hi, thanks), small-talk (how are you, what's your name), or a direct factual question about the AI system itself (what model are you, what can you do) — where a one-sentence reply genuinely closes the request. For EVERYTHING ELSE: dispatch=true. When in doubt: dispatch=true. " +
         "The `reply` must be ABBY's actual answer AS ABBY — never describe this router, the classification, or that you are deciding anything; the operator must never see routing internals.";
-      const decRes = await fetch(llmFetchUrl("/chat/completions"), {
+      const decRes = await fetch(llmRouteUrl("/chat/completions"), {
         method: "POST",
         headers: openrouterHeaders(),
         body: JSON.stringify({
@@ -762,7 +762,7 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const orRes = await fetch(llmFetchUrl("/chat/completions"), {
+    const orRes = await fetch(llmRouteUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({
@@ -780,7 +780,7 @@ router.post("/ai/chat", async (req, res) => {
       if (orRes.status === 404) {
         const fallbackModel = "meta/llama-3.1-70b-instruct";
         req.log.warn({ primary: model, fallback: fallbackModel }, "LLM 404 — retrying with fallback model");
-        const fbRes = await fetch(llmFetchUrl("/chat/completions"), {
+        const fbRes = await fetch(llmRouteUrl("/chat/completions"), {
           method: "POST",
           headers: openrouterHeaders(),
           body: JSON.stringify({ model: normalizeModel(fallbackModel), stream: true, messages: chatMessages, max_tokens: 700 }),
@@ -911,7 +911,7 @@ router.post("/ai/complete", async (req, res) => {
   ];
 
   try {
-    const r = await fetch(llmFetchUrl("/chat/completions"), {
+    const r = await fetch(llmRouteUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
       body: JSON.stringify({ model: normalizeModel(model), messages, max_tokens: 512 }),
