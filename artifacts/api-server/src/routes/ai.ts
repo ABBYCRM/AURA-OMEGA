@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
 import { llmBaseUrl, llmFetchUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel } from "../lib/integrations";
+import { extractAndStoreUserFacts, getUserProfile } from "../lib/userMemory";
 import { listSecretNames } from "../lib/vault";
 import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
@@ -378,11 +379,14 @@ router.post("/ai/chat", async (req, res) => {
   const model = resolveModel(resolvedAgentId, agent.model, overrideModel);
   const persona = AGENT_PERSONAS[resolvedAgentId] ?? `You are ${agent.name}, an AI agent in the ABBY AURA swarm.`;
   const customPersonality = readSettings().systemPersonality?.trim() ?? "";
+  // Fetch learned operator profile (Honcho-equivalent, built on our own stack).
+  // Returns "" on first conversation — silently fills in as turns accumulate.
+  const operatorProfile = await getUserProfile(channelId);
   // Live-reach scan is appended on EVERY turn so the agent always knows its
   // real, current tools + which integrations are online.
   const systemPrompt =
     (customPersonality ? customPersonality + "\n\n" : "") +
-    persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard());
+    persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard()) + operatorProfile;
 
   // A user turn may carry uploaded files. Images are sent to the model as vision
   // input (which also reads text in the image — i.e. OCR); text-like files have
@@ -492,6 +496,13 @@ router.post("/ai/chat", async (req, res) => {
         messageType: "agent",
         metadata: JSON.stringify({ model: usedModel, generatedBy: via }),
       });
+      // Async user-memory extraction — never blocks the stream close.
+      // Appends the assistant reply to history so the extractor sees the full turn.
+      const fullHistory = [
+        ...history.map((m) => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })),
+        { role: "assistant", content: text.trim() },
+      ];
+      extractAndStoreUserFacts(channelId, fullHistory).catch(() => {});
     }
     sendEvent({ done: true, agentId: agent.id, agentName: agent.name, model: usedModel });
     res.end();
