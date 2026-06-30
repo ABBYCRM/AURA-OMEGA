@@ -4,6 +4,7 @@ import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
 import { llmBaseUrl, llmFetchUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel } from "../lib/integrations";
 import { extractAndStoreUserFacts, getUserProfile } from "../lib/userMemory";
+import { getScratchpad } from "./scratchpad";
 import { listSecretNames } from "../lib/vault";
 import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
@@ -382,10 +383,18 @@ router.post("/ai/chat", async (req, res) => {
   // Fetch learned operator profile (Honcho-equivalent, built on our own stack).
   // Returns "" on first conversation — silently fills in as turns accumulate.
   const operatorProfile = await getUserProfile(channelId);
+  // Operator scratchpad — pinned context the user explicitly set (briefs, URLs,
+  // client names, standing instructions). Injected at top of system prompt so
+  // ABBY walks in already briefed without the user having to repeat themselves.
+  const scratchpadContent = await getScratchpad();
+  const scratchpadBlock = scratchpadContent.trim()
+    ? `\n\n## Operator scratchpad (pinned context — always consider this)\n${scratchpadContent.trim()}`
+    : "";
   // Live-reach scan is appended on EVERY turn so the agent always knows its
   // real, current tools + which integrations are online.
   const systemPrompt =
     (customPersonality ? customPersonality + "\n\n" : "") +
+    scratchpadBlock +
     persona + CHAT_MODE_DIRECTIVE + buildCapabilityCard(resolvedAgentId) + buildLiveReachCard(resolvedAgentId) + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + (await buildVaultCard()) + operatorProfile;
 
   // A user turn may carry uploaded files. Images are sent to the model as vision

@@ -15,6 +15,7 @@ import ScheduledConsole from "@/pages/scheduled-console";
 import Agents from "@/pages/agents";
 import Tasks from "@/pages/tasks";
 import Settings from "@/pages/settings";
+import ScratchpadPage from "@/pages/scratchpad";
 import CronPage from "@/pages/cron";
 import RemotePage from "@/pages/remote";
 import MissionsPage from "@/pages/missions";
@@ -41,6 +42,7 @@ function Router() {
         <Route path="/runtimes" component={RuntimesPage} />
         <Route path="/integrations" component={IntegrationsConsole} />
         <Route path="/settings" component={Settings} />
+        <Route path="/scratchpad" component={ScratchpadPage} />
         <Route path="/remote" component={RemotePage} />
         <Route path="/missions" component={MissionsPage} />
         <Route path="/reference" component={ReferencePage} />

@@ -10,6 +10,7 @@ import {
   Network,
   Settings as SettingsIcon,
   ShieldCheck,
+  StickyNote,
   Workflow,
   X,
   Plus,
@@ -35,6 +36,7 @@ import { toast } from "sonner";
 // Manus-style navigation: chat threads live on the left rail, everything else
 // sits behind a single "More" drawer. No theatrical 12-link sidebar.
 const moreNav = [
+  { href: "/scratchpad",  icon: StickyNote,    label: "Scratchpad",    hint: "Pinned context — ABBY reads this always" },
   { href: "/hermes",      icon: Boxes,         label: "Hermes",        hint: "Runtime · skills · heartbeat" },
   { href: "/remote",      icon: Smartphone,    label: "Remote Control",hint: "BOS-OMEGA devices" },
   { href: "/missions",    icon: Rocket,        label: "Missions",      hint: "Durable mission kernel" },
