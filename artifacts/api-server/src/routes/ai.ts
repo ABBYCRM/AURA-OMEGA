@@ -297,9 +297,9 @@ export function requestsTaskExecution(message: string): boolean {
 const CHAT_HISTORY_LIMIT = 16;
 
 export const ABBY_ID = 1;
-// Default: kimi-k2.6 for maximum capability. Falls back to llama-3.1-70b on 402/429.
+// Default: kimi-k2 for maximum capability. Falls back to llama-3.1-70b on 402/429.
 // Set ABBY_MODEL env var to override (e.g. "meta/llama-3.1-70b-instruct" for reliability).
-export const ABBY_DEFAULT_MODEL = process.env["ABBY_MODEL"] || "moonshotai/kimi-k2.6";
+export const ABBY_DEFAULT_MODEL = process.env["ABBY_MODEL"] || "moonshotai/kimi-k2";
 
 export function resolveModel(_agentId: number, agentModel: string | null | undefined, override: unknown): string {
   return (typeof override === "string" && override.trim())
@@ -320,7 +320,7 @@ router.get("/ai/models", async (req, res) => {
       // Default: moonshotai/kimi-k2.6 (highest capability, 1M context).
       // Set ABBY_MODEL env var to "meta/llama-3.1-70b-instruct" for max reliability.
       const models = [
-        { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6 (default)", context_length: 131072 },
+        { id: "moonshotai/kimi-k2", name: "Kimi K2 (default)", context_length: 131072 },
         { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct", context_length: 131072 },
         { id: "meta/llama-3.1-70b-instruct", name: "Llama 3.1 70B Instruct (fallback)", context_length: 131072 },
         { id: "meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B Instruct", context_length: 131072 },
@@ -775,7 +775,48 @@ router.post("/ai/chat", async (req, res) => {
 
     if (!orRes.ok) {
       const errText = await orRes.text();
-      req.log.error({ status: orRes.status, errText }, "LLM provider error");
+      req.log.error({ status: orRes.status, errText, model: normalizeModel(model) }, "LLM provider error");
+      // 404 = model not found on NVIDIA NIM — retry with stable fallback model before surfacing error
+      if (orRes.status === 404) {
+        const fallbackModel = "meta/llama-3.1-70b-instruct";
+        req.log.warn({ primary: model, fallback: fallbackModel }, "LLM 404 — retrying with fallback model");
+        const fbRes = await fetch(llmFetchUrl("/chat/completions"), {
+          method: "POST",
+          headers: openrouterHeaders(),
+          body: JSON.stringify({ model: fallbackModel, stream: true, messages: chatMessages, max_tokens: 700 }),
+        }).catch(() => null);
+        if (fbRes?.ok) {
+          const fbReader = fbRes.body?.getReader();
+          if (fbReader) {
+            const fbDec = new TextDecoder();
+            let fbBuf = "";
+            while (true) {
+              const { done, value } = await fbReader.read();
+              if (done) break;
+              fbBuf += fbDec.decode(value, { stream: true });
+              const fbLines = fbBuf.split("\n");
+              fbBuf = fbLines.pop() ?? "";
+              for (const line of fbLines) {
+                const t = line.trim();
+                if (!t || t === "data: [DONE]" || !t.startsWith("data: ")) continue;
+                try {
+                  const tok = JSON.parse(t.slice(6))?.choices?.[0]?.delta?.content;
+                  if (tok) { fullResponse += tok; sendEvent({ token: tok }); }
+                } catch { /* skip */ }
+              }
+            }
+            if (fullResponse.trim()) {
+              await db.insert(messagesTable).values({
+                channelId, agentId: agent.id, agentName: agent.name, agentColor: agent.color,
+                content: fullResponse.trim(), messageType: "agent",
+                metadata: JSON.stringify({ model: fallbackModel, generatedBy: "nvidia-fallback" }),
+              });
+            }
+            sendEvent({ done: true, agentId: agent.id, agentName: agent.name, model: fallbackModel });
+            res.end(); return;
+          }
+        }
+      }
       const hint =
         orRes.status === 402
           ? `LLM provider is out of credits. Check your NVIDIA_API_KEY balance.`

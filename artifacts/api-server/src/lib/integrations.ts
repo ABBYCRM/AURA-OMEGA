@@ -87,11 +87,13 @@ export async function probeNvidiaKeys(): Promise<{ ok: number; dead: string[] }>
       const r = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
         method: "POST",
         headers: { "Authorization": `Bearer ${k}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", messages: [{ role: "user", content: "ok" }], max_tokens: 4 }),
+        // Use stable llama model to test the KEY, not the primary model.
+        // 404 means model-not-found (not key-invalid) — only 401 = key revoked.
+        body: JSON.stringify({ model: "meta/llama-3.1-70b-instruct", messages: [{ role: "user", content: "ok" }], max_tokens: 4 }),
         signal: AbortSignal.timeout(8000),
       });
-      // Only 404 (model not found on this key) and 401 (revoked) = dead key.
-      if (r.status === 404 || r.status === 401) {
+      // Only 401 (key revoked/invalid) = dead key. 404 = model not found, not key issue.
+      if (r.status === 401) {
         DEAD_KEYS.add(k);
         dead.push(k.slice(-8));
       }
@@ -464,16 +466,18 @@ export async function completeChat(
           };
           return data?.choices?.[0]?.message?.content?.trim() || "(no response)";
         }
-        // 429/401/404 — rotate key and retry
-        if ((r.status === 429 || r.status === 401 || r.status === 404) && keys.length > 0 && attempt < keys.length - 1) {
-          if (r.status === 404 && headers["Authorization"]) {
-            markNvidiaKeyDead(headers["Authorization"].replace(/^Bearer\s+/i, ""));
-          }
-          logger.warn({ model: m, attempt, status: r.status }, "llm 429/401/404 — rotating NVIDIA key");
+        // 404 = model not found (not a key issue) — break key loop and return null for model fallback
+        if (r.status === 404) {
+          logger.warn({ model: m, status: 404 }, "llm 404 — model not found, triggering model fallback");
+          return null;
+        }
+        // 429/401 — rotate key and retry
+        if ((r.status === 429 || r.status === 401) && keys.length > 0 && attempt < keys.length - 1) {
+          logger.warn({ model: m, attempt, status: r.status }, "llm 429/401 — rotating NVIDIA key");
           await new Promise((res) => setTimeout(res, 800 + attempt * 400));
           continue;
         }
-        // 402 (OpenRouter credits depleted on kimi-k2.6) — signal caller to fallback
+        // 402 — signal caller to fallback
         if (r.status === 402) {
           logger.warn({ model: m, status: 402 }, "llm 402 — model credits depleted, will fallback");
           return null; // triggers fallback below
