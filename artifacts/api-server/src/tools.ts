@@ -409,26 +409,45 @@ async function steelScrapeOnce(url: string, useProxy: boolean): Promise<string> 
   return (data["markdown"] as string) || JSON.stringify(data);
 }
 
-/** ScrapingBee residential proxy scrape — last resort when Steel is blocked. */
-async function scrapingBeeScrape(url: string): Promise<string> {
-  const sbKey = process.env["SCRAPINGBEE_API_KEY"];
-  if (!sbKey) throw new Error("SCRAPINGBEE_API_KEY not set");
-  const endpoint = `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${encodeURIComponent(url)}&premium_proxy=true&render_js=false`;
-  const r = await fetch(endpoint, { signal: AbortSignal.timeout(25_000) });
-  if (!r.ok) throw new Error(`ScrapingBee ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const html = await r.text();
+function stripHtml(html: string, cap = 8000): string {
   return html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 8000);
+    .slice(0, cap);
+}
+
+/** ScrapingBee residential proxy — tier 3 scraper. */
+async function scrapingBeeScrape(url: string): Promise<string> {
+  const sbKey = process.env["SCRAPINGBEE_API_KEY"];
+  if (!sbKey) throw new Error("SCRAPINGBEE_API_KEY not set");
+  const r = await fetch(
+    `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${encodeURIComponent(url)}&premium_proxy=true&render_js=false`,
+    { signal: AbortSignal.timeout(25_000) },
+  );
+  if (!r.ok) throw new Error(`ScrapingBee ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return stripHtml(await r.text());
+}
+
+/** ScrapFly residential proxy — tier 4 scraper. */
+async function scrapFlyScrape(url: string): Promise<string> {
+  const key = process.env["SCRAPFLY_API_KEY"];
+  if (!key) throw new Error("SCRAPFLY_API_KEY not set");
+  const r = await fetch(
+    `https://api.scrapfly.io/scrape?key=${key}&url=${encodeURIComponent(url)}&render_js=false&country=us`,
+    { signal: AbortSignal.timeout(25_000) },
+  );
+  if (!r.ok) throw new Error(`ScrapFly ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const data = (await r.json()) as { result?: { content?: string; status_code?: number } };
+  const content = data?.result?.content ?? "";
+  return stripHtml(content);
 }
 
 /**
- * Scrape pipeline: Steel direct → Steel proxy → ScrapingBee residential IP.
- * Each tier only runs when the prior tier returns a bot-wall or empty shell.
+ * Scrape pipeline: Steel direct → Steel proxy → ScrapingBee → ScrapFly.
+ * Each tier only activates when the prior one returns a bot-wall or empty shell.
  */
 export async function steelScrape(url: string): Promise<string> {
   const direct = await steelScrapeOnce(url, false);
@@ -436,17 +455,25 @@ export async function steelScrape(url: string): Promise<string> {
   try {
     const viaProxy = await steelScrapeOnce(url, true);
     if (!scrapeLooksBlocked(viaProxy)) return viaProxy;
-    // Both Steel tiers blocked — try ScrapingBee residential IPs as last resort
     if (process.env["SCRAPINGBEE_API_KEY"]) {
       try {
         const viaBee = await scrapingBeeScrape(url);
         if (!scrapeLooksBlocked(viaBee)) return viaBee;
       } catch { /* fall through */ }
     }
+    if (process.env["SCRAPFLY_API_KEY"]) {
+      try {
+        const viaFly = await scrapFlyScrape(url);
+        if (!scrapeLooksBlocked(viaFly)) return viaFly;
+      } catch { /* fall through */ }
+    }
     return viaProxy.trim().length > direct.trim().length ? viaProxy : direct;
   } catch {
-    if (process.env["SCRAPINGBEE_API_KEY"]) {
-      try { return await scrapingBeeScrape(url); } catch { /* ignore */ }
+    for (const fn of [
+      process.env["SCRAPINGBEE_API_KEY"] ? scrapingBeeScrape : null,
+      process.env["SCRAPFLY_API_KEY"] ? scrapFlyScrape : null,
+    ]) {
+      if (fn) try { return await fn(url); } catch { /* ignore */ }
     }
     return direct;
   }
@@ -461,6 +488,17 @@ async function steelScreenshot(url: string): Promise<number> {
     body: JSON.stringify({ url, fullPage: true }),
   });
   if (!r.ok) throw new Error(`Steel ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const buf = await r.arrayBuffer();
+  return buf.byteLength;
+}
+
+/** ScreenshotOne — fallback when Steel screenshot fails or is unavailable. */
+async function screenshotOneTake(url: string): Promise<number> {
+  const key = process.env["SCREENSHOTONE_ACCESS_KEY"];
+  if (!key) throw new Error("SCREENSHOTONE_ACCESS_KEY not set");
+  const endpoint = `https://api.screenshotone.com/take?access_key=${key}&url=${encodeURIComponent(url)}&full_page=true&format=png&response_type=by_format`;
+  const r = await fetch(endpoint, { signal: AbortSignal.timeout(30_000) });
+  if (!r.ok) throw new Error(`ScreenshotOne ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const buf = await r.arrayBuffer();
   return buf.byteLength;
 }
@@ -690,9 +728,15 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
     run: async (args) => {
       const url = String(args["url"] ?? "").trim();
       if (!/^https?:\/\//i.test(url)) return "error: a valid absolute http(s) url is required.";
-      const bytes = await steelScreenshot(url);
-      // A near-empty buffer means the capture failed (blocked page, timeout, or a
-      // non-image error body) — report that honestly instead of "0 KB captured".
+      let bytes = 0;
+      try {
+        bytes = await steelScreenshot(url);
+      } catch {
+        // Steel unavailable or failed — try ScreenshotOne
+      }
+      if (bytes < 1024 && process.env["SCREENSHOTONE_ACCESS_KEY"]) {
+        try { bytes = await screenshotOneTake(url); } catch { /* ignore */ }
+      }
       if (bytes < 1024) {
         return `error: screenshot returned no usable image (${bytes} bytes) for ${url} — the page likely blocked the capture or timed out.`;
       }

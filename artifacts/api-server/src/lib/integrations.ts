@@ -1040,7 +1040,9 @@ export function integrationStatus(): IntegrationStatus[] {
   return [
     { key: "nvidia", name: `NVIDIA NIM (${nvidiaKeys().length} key${nvidiaKeys().length === 1 ? "" : "s"})`, category: "llm", envVar: "NVIDIA_API_KEY", configured: nvidiaConfigured() },
     { key: "kimi", name: `Kimi.com (Moonshot) — ${kimiPrimary() ? "PRIMARY" : "fallback"}`, category: "llm", envVar: "KIMI_API_KEY", configured: kimiApiConfigured() },
-    { key: "scrapingbee", name: "ScrapingBee Residential Proxy (IP rotation)", category: "proxy", envVar: "SCRAPINGBEE_API_KEY", configured: has("SCRAPINGBEE_API_KEY") },
+    { key: "scrapingbee", name: "ScrapingBee Residential Proxy", category: "scraping", envVar: "SCRAPINGBEE_API_KEY", configured: has("SCRAPINGBEE_API_KEY") },
+    { key: "scrapfly", name: "ScrapFly", category: "scraping", envVar: "SCRAPFLY_API_KEY", configured: has("SCRAPFLY_API_KEY") },
+    { key: "screenshotone", name: "ScreenshotOne", category: "browser", envVar: "SCREENSHOTONE_ACCESS_KEY", configured: has("SCREENSHOTONE_ACCESS_KEY") },
     // OpenRouter removed 2026-06-27 — NVIDIA-only stack now.
     { key: "helicone", name: "Helicone", category: "observability", envVar: "HELICONE_API_KEY", configured: has("HELICONE_API_KEY") },
     { key: "langsmith", name: "LangSmith (LangChain)", category: "observability", envVar: "LANGSMITH_API_KEY", configured: langsmithEnabled() },
