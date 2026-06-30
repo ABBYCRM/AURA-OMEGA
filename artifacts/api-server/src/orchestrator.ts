@@ -48,7 +48,7 @@ import {
   sanitizeForStorage,
   type ToolContext,
 } from "./tools";
-import { sendInngestEvent, traceLlmRun, llmBaseUrl, llmFetchUrl, llmRouteUrl, completeChat } from "./lib/integrations";
+import { sendInngestEvent, traceLlmRun, llmBaseUrl, llmFetchUrl, llmRouteUrl, completeChat, normalizeModel } from "./lib/integrations";
 import { groundingProof } from "./lib/grounding";
 import { recordOutcome, matchSkillForGoal } from "./lib/hermes";
 import { reflexiveCritique, recallPostmortem } from "./lib/hermes/critique";
@@ -239,7 +239,7 @@ async function completeChatTurn(
   messages: ChatMessage[],
   tools: Array<Record<string, unknown>>,
 ): Promise<AssistantMessage> {
-  const body: Record<string, unknown> = { model, messages, stream: false, max_tokens: 8000 };
+  const body: Record<string, unknown> = { model: normalizeModel(model), messages, stream: false, max_tokens: 8000 };
   if (tools.length) {
     body["tools"] = tools;
     body["tool_choice"] = "auto";

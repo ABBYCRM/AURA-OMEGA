@@ -783,7 +783,7 @@ router.post("/ai/chat", async (req, res) => {
         const fbRes = await fetch(llmFetchUrl("/chat/completions"), {
           method: "POST",
           headers: openrouterHeaders(),
-          body: JSON.stringify({ model: fallbackModel, stream: true, messages: chatMessages, max_tokens: 700 }),
+          body: JSON.stringify({ model: normalizeModel(fallbackModel), stream: true, messages: chatMessages, max_tokens: 700 }),
         }).catch(() => null);
         if (fbRes?.ok) {
           const fbReader = fbRes.body?.getReader();
