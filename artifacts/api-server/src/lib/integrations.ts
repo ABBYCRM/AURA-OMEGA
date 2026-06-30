@@ -413,12 +413,13 @@ export function kimiApiConfigured(): boolean {
 }
 
 /**
- * Returns true when the Kimi.com API is the PRIMARY LLM provider.
- * Operator directive 2026-06-29: when KIMI_API_KEY starts with "sk-kimi-",
- * route ALL LLM calls to api.moonshot.cn first; fall back to NVIDIA on failure.
+ * Returns true only when KIMI_PRIMARY=true is explicitly set in env.
+ * Per CLAUDE.md: NVIDIA NIM is primary; Kimi is tertiary fallback only.
+ * Do NOT activate based on key prefix — that caused routing to api.moonshot.cn
+ * with 401 errors because the sk-kimi- key is not a valid Moonshot direct API key.
  */
 export function kimiPrimary(): boolean {
-  return (process.env["KIMI_API_KEY"] ?? "").startsWith("sk-kimi-");
+  return process.env["KIMI_PRIMARY"] === "true";
 }
 
 /**
