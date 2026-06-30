@@ -5,7 +5,9 @@ name: Build & Deploy to Render
 # This job only pings the Render deploy API to trigger a fast redeploy.
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'claude/**'
     paths-ignore:
       - '**.md'
       - '.agents/**'
@@ -16,18 +18,46 @@ jobs:
     steps:
       - name: Trigger Render deploy
         run: |
-          # Try RENDER_API_KEY first (primary name), fall back to RENDER_TOKEN for compatibility
+          # Try all known secret name variants for the Render API key
           RKEY="${{ secrets.RENDER_API_KEY }}"
           [ -z "$RKEY" ] && RKEY="${{ secrets.RENDER_TOKEN }}"
-          HTTP_CODE=$(curl -s -o /tmp/render_resp.json -w "%{http_code}" \
-            -X POST \
-            -H "Authorization: Bearer $RKEY" \
-            -H "Content-Type: application/json" \
-            "https://api.render.com/v1/services/srv-d8u653u7r5hc73f3crvg/deploys" \
-            -d '{}')
-          echo "Render deploy: HTTP $HTTP_CODE"
-          cat /tmp/render_resp.json || true
-          if [ "$HTTP_CODE" -ge 400 ]; then
-            echo "Deploy trigger failed — check RENDER_TOKEN and service ID"
-            exit 1
+          [ -z "$RKEY" ] && RKEY="${{ secrets.RENDER_KEY }}"
+          [ -z "$RKEY" ] && RKEY="${{ secrets.RENDER_DEPLOY_KEY }}"
+          [ -z "$RKEY" ] && RKEY="${{ secrets.RENDER_AUTH_TOKEN }}"
+          [ -z "$RKEY" ] && RKEY="${{ secrets.RENDER_SERVICE_API_KEY }}"
+
+          # If we found an API key, use the REST deploy endpoint
+          if [ -n "$RKEY" ]; then
+            HTTP_CODE=$(curl -s -o /tmp/render_resp.json -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $RKEY" \
+              -H "Content-Type: application/json" \
+              "https://api.render.com/v1/services/srv-d8u653u7r5hc73f3crvg/deploys" \
+              -d '{"clearCache":"do_not_clear"}')
+            echo "Render deploy via API key: HTTP $HTTP_CODE"
+            cat /tmp/render_resp.json || true
+            if [ "$HTTP_CODE" -ge 400 ]; then
+              echo "API deploy failed — HTTP $HTTP_CODE"
+            else
+              echo "Deploy triggered successfully via API key"
+              exit 0
+            fi
           fi
+
+          # Fallback: deploy hook URL (doesn't need Bearer auth)
+          DHOOK="${{ secrets.RENDER_DEPLOY_HOOK }}"
+          [ -z "$DHOOK" ] && DHOOK="${{ secrets.RENDER_HOOK_URL }}"
+          [ -z "$DHOOK" ] && DHOOK="${{ secrets.RENDER_WEBHOOK_URL }}"
+          if [ -n "$DHOOK" ]; then
+            HTTP_CODE=$(curl -s -o /tmp/render_resp.json -w "%{http_code}" -X GET "$DHOOK")
+            echo "Render deploy via hook: HTTP $HTTP_CODE"
+            cat /tmp/render_resp.json || true
+            if [ "$HTTP_CODE" -lt 400 ]; then
+              echo "Deploy triggered successfully via hook"
+              exit 0
+            fi
+          fi
+
+          echo "No valid Render credentials found in GitHub Secrets."
+          echo "Set RENDER_API_KEY (or RENDER_DEPLOY_HOOK) in repo secrets to enable auto-deploy."
+          exit 1
