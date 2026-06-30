@@ -53,6 +53,7 @@ import { groundingProof } from "./lib/grounding";
 import { recordOutcome, matchSkillForGoal } from "./lib/hermes";
 import { reflexiveCritique, recallPostmortem } from "./lib/hermes/critique";
 import { swarmClear } from "./lib/swarm-bus";
+import { scratchClear } from "./lib/agentScratch";
 import {
   canonicalJson,
   checkToolPayloadBudget,
@@ -894,6 +895,8 @@ export async function orchestrateGoal(opts: {
   // Unique key for this orchestration run — scopes swarm_broadcast/swarm_read messages
   // and correlates all concurrent AURA executions to the same bus partition.
   const runKey = `ch${channelId}-${startedAt.getTime().toString(36)}`;
+  // Clear the agent working scratchpad so the UI shows fresh reasoning for this task.
+  scratchClear(channelId);
   // Declare finalAnswer at the top of the function so every exit path (early
   // return on clarification, swarm paused, no directives, post-dispatch catch,
   // etc.) has a defined value to pass to recordOutcome() and ensureFinalAnswer().

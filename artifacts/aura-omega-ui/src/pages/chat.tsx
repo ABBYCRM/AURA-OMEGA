@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import {
   Plus, Send, Paperclip, X, Menu, Download, Trash2, Pencil, Check,
   MessageSquare, Bot, AlertTriangle, Loader2, Sparkles, Copy, Volume2, Square, Mic, Rocket,
+  ChevronDown, ChevronUp, Brain,
 } from "lucide-react";
 
 // Uploaded to /api/uploads on pick; images are rendered inline and sent to ABBY
@@ -595,6 +596,9 @@ export default function ChatPage() {
           </div>
         </div>
 
+        {/* Agent working scratchpad */}
+        {activeId != null && <AgentScratchPanel channelId={activeId} streaming={ai.streaming} />}
+
         {/* Composer */}
         <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur-sm">
           <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
@@ -680,6 +684,89 @@ export default function ChatPage() {
 
 // ── Subcomponents ───────────────────────────────────────────────────────────
 
+type ScratchType = "thought" | "hypothesis" | "result" | "todo" | "note";
+interface ScratchEntry { agentName: string; type: ScratchType; content: string; ts: number; }
+
+const SCRATCH_TYPE_STYLE: Record<ScratchType, { label: string; color: string }> = {
+  thought:    { label: "thought",    color: "text-cyan-400 border-cyan-400/30 bg-cyan-400/10" },
+  hypothesis: { label: "hypothesis", color: "text-violet-400 border-violet-400/30 bg-violet-400/10" },
+  result:     { label: "result",     color: "text-emerald-400 border-emerald-400/30 bg-emerald-400/10" },
+  todo:       { label: "todo",       color: "text-amber-400 border-amber-400/30 bg-amber-400/10" },
+  note:       { label: "note",       color: "text-muted-foreground border-border bg-muted/30" },
+};
+
+function AgentScratchPanel({ channelId, streaming }: { channelId: number; streaming: boolean }) {
+  const [entries, setEntries] = useState<ScratchEntry[]>([]);
+  const [open, setOpen] = useState(false);
+  const [hasHadContent, setHasHadContent] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const r = await fetch(resolveApiUrl(`/api/agent-scratch?channelId=${channelId}`));
+        if (!r.ok) return;
+        const data = await r.json();
+        const list: ScratchEntry[] = Array.isArray(data.entries) ? data.entries : [];
+        if (!alive) return;
+        setEntries(list);
+        if (list.length > 0) {
+          setHasHadContent(true);
+          setOpen(true);
+        }
+      } catch { /* silent */ }
+    };
+    poll();
+    const interval = setInterval(poll, streaming ? 1500 : 5000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [channelId, streaming]);
+
+  if (!hasHadContent && entries.length === 0) return null;
+
+  return (
+    <div className="shrink-0 border-t border-card-border bg-card/40">
+      <div className="max-w-3xl mx-auto px-3 sm:px-4">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="w-full flex items-center gap-2 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Brain className="w-3.5 h-3.5 text-primary/70" />
+          <span className="font-semibold text-primary/80">Agent working scratchpad</span>
+          <span className="text-muted-foreground/50 ml-0.5">({entries.length} {entries.length === 1 ? "entry" : "entries"})</span>
+          {streaming && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+          <span className="ml-auto">{open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}</span>
+        </button>
+        {open && (
+          <div className="pb-3 space-y-1.5 max-h-60 overflow-y-auto">
+            {entries.length === 0 ? (
+              <div className="text-xs text-muted-foreground/40 py-2">No entries yet for this task.</div>
+            ) : (
+              entries.map((e, i) => {
+                const style = SCRATCH_TYPE_STYLE[e.type] ?? SCRATCH_TYPE_STYLE.note;
+                return (
+                  <div key={i} className="flex items-start gap-2 text-xs">
+                    <span className="shrink-0 mt-0.5 text-muted-foreground/50 font-mono w-16 text-right">
+                      {e.agentName.replace("AURA-", "A")}
+                    </span>
+                    <span className={cn(
+                      "shrink-0 mt-0.5 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                      style.color,
+                    )}>
+                      {style.label}
+                    </span>
+                    <span className="text-foreground/80 leading-relaxed flex-1 min-w-0 break-words">
+                      {e.content}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function BridgePill({ status }: { status: { enabled: boolean; tokenConfigured: boolean; channelConfigured: boolean; channelId: string | null } | null }) {
   const ready = Boolean(status?.enabled && status?.tokenConfigured && status?.channelConfigured);
