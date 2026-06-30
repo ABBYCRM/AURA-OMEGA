@@ -1026,11 +1026,7 @@ function getDoRelayUrls(): string[] {
 
 export function getRelayBaseUrls(): string[] {
   const cf = CF_RELAY_SUBDOMAINS.map((s) => `https://${s}.workers.dev/v1`);
-  // Only include DO relays when RELAY_AUTH_TOKEN is configured — without it
-  // the relay will reject every request with 401, wasting retry budget.
-  const doRelays = process.env["RELAY_AUTH_TOKEN"]
-    ? getDoRelayUrls().map((u) => `${u}/v1`)
-    : [];
+  const doRelays = getDoRelayUrls().map((u) => `${u}/v1`);
   return [...cf, ...doRelays];
 }
 

@@ -138,7 +138,8 @@ async function waitForDropletIp(
 
 async function main() {
   const doKey = requireEnv("DO_API_KEY");
-  const relayToken = requireEnv("RELAY_AUTH_TOKEN");
+  // RELAY_AUTH_TOKEN is optional — omit for open relays (consistent with existing droplets)
+  const relayToken = process.env["RELAY_AUTH_TOKEN"] ?? "";
   const renderKey = requireEnv("RENDER_API_KEY");
   void doKey; void renderKey;
 
