@@ -1838,6 +1838,45 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
       }
     },
   },
+
+  do_exec: {
+    name: "do_exec",
+    description:
+      "Execute a shell command on the persistent AURA workspace server (DigitalOcean droplet). Files and installed packages persist between calls — use /workspace as the working directory. Supports git, npm, pnpm, python, docker, and full build toolchains. Returns stdout, stderr, and exit code.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string", description: "Shell command to run." },
+        cwd: { type: "string", description: "Working directory on the remote server (default: /workspace)." },
+        timeout: { type: "integer", description: "Timeout in milliseconds (default 120000, max 300000)." },
+      },
+      required: ["command"],
+    },
+    run: async (args) => {
+      const token = process.env["DO_WORKSPACE_TOKEN"];
+      if (!token) return "error: DO_WORKSPACE_TOKEN is not set — add it to Render environment variables.";
+      const url = process.env["DO_WORKSPACE_URL"] ?? "http://138.197.44.16:7070";
+      const command = String(args["command"] ?? "").trim();
+      if (!command) return "error: command is required.";
+      const cwd = String(args["cwd"] ?? "/workspace");
+      const timeout = Math.min(Number(args["timeout"] ?? 120_000), 300_000);
+      try {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-exec-token": token },
+          body: JSON.stringify({ command, cwd, timeout }),
+          signal: AbortSignal.timeout(timeout + 5_000),
+        });
+        if (!r.ok) return `error: workspace exec returned HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`;
+        const data = (await r.json()) as { stdout: string; stderr: string; exitCode: number; error?: string | null };
+        if (data.error) return `error: ${data.error}`;
+        const out = [data.stdout, data.stderr].filter(Boolean).join("\n").trim();
+        return `exit ${data.exitCode}\n${out || "(no output)"}`;
+      } catch (err) {
+        return `error: ${String(err).slice(0, 200)}`;
+      }
+    },
+  },
 };
 
 // ─── Per-agent tool permissions ──────────────────────────────────────────────
@@ -1848,7 +1887,7 @@ const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
 
 export const AGENT_TOOLS: Record<number, string[]> = {
   1: ALL_TOOLS, // ABBY — full authority
-  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-1 — code
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "do_exec", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-1 — code + persistent workspace
   3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "jina_read", "deep_research", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-2 — browser
   4: ["memory_write", "memory_search", "web_search", "tier1_sources", "jina_read", "deep_research", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-3 — memory/RAG
   5: ["http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "send_email", "text_to_speech", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-4 — APIs + scheduling

@@ -970,20 +970,30 @@ export async function composioConnectionStatus(connectionId: string): Promise<{ 
   };
 }
 
-// ─── Multi-IP Relay System (Cloudflare Workers) ─────────────────────────────
-// When NVIDIA blacklists an IP/ASN, we rotate across 4 CF Worker relays that
-// forward requests from different edge IPs. Each relay is a Cloudflare Worker
-// deployed to a different subdomain for IP diversity.
+// ─── Multi-IP Relay System ───────────────────────────────────────────────────
+// Two tiers for genuine IP diversity:
+//   Tier A — Cloudflare Workers (AS13335): nvidia-relay-1..4.aura-omega-relays.workers.dev
+//   Tier B — DigitalOcean droplets (AS14061): relay-east (NYC1) + relay-west (SFO3)
+// Rotation interleaves both ASNs so a block on CF doesn't kill all relays.
+// DO relays: port 8080, require X-Relay-Token header.
 
-const RELAY_SUBDOMAINS = [
+const CF_RELAY_SUBDOMAINS = [
   "nvidia-relay-1.aura-omega-relays",
   "nvidia-relay-2.aura-omega-relays",
   "nvidia-relay-3.aura-omega-relays",
   "nvidia-relay-4.aura-omega-relays",
 ];
 
+// DO relay IPs injected via env — set DO_RELAY_IPS=ip1,ip2 in Render
+function getDoRelayUrls(): string[] {
+  const raw = process.env["DO_RELAY_IPS"] ?? "161.35.4.225,134.199.214.225";
+  return raw.split(",").map((ip) => `http://${ip.trim()}:8080`);
+}
+
 export function getRelayBaseUrls(): string[] {
-  return RELAY_SUBDOMAINS.map((s) => `https://${s}.workers.dev/v1`);
+  const cf = CF_RELAY_SUBDOMAINS.map((s) => `https://${s}.workers.dev/v1`);
+  const doRelays = getDoRelayUrls().map((u) => `${u}/v1`);
+  return [...cf, ...doRelays]; // interleaved in rotation
 }
 
 let relayCursor = Math.floor(Math.random() * 1024);
@@ -992,6 +1002,13 @@ export function nextRelayBaseUrl(): string {
   const url = urls[relayCursor % urls.length];
   relayCursor = (relayCursor + 1) % urls.length;
   return url;
+}
+
+// ─── DigitalOcean Workspace ──────────────────────────────────────────────────
+// aura-workspace droplet (NYC3, 2vcpu-4gb): persistent AURA-1 dev environment.
+// IP: 138.197.44.16 — exec API on port 7070, auth via DO_WORKSPACE_TOKEN.
+export function doWorkspaceUrl(): string {
+  return process.env["DO_WORKSPACE_URL"] ?? "http://138.197.44.16:7070";
 }
 
 // ─── ScrapingBee ─────────────────────────────────────────────────────────────
