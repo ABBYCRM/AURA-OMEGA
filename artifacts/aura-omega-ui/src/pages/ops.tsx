@@ -34,7 +34,7 @@ export default function OpsPage() {
           <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_15%_20%,rgba(139,92,246,.20),transparent_24rem),radial-gradient(circle_at_85%_10%,rgba(34,211,238,.12),transparent_22rem)]" />
           <div className="relative grid gap-6 lg:grid-cols-[1.2fr_.8fr] items-center">
             <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-bold text-primary"><BrainCircuit className="w-4 h-4" /> AURA-OMEGA AGENTIC OPERATIONS CONSOLE</div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-bold text-primary"><BrainCircuit className="w-4 h-4" /> AURA-OMEGA</div>
               <h1 className="mt-4 text-4xl lg:text-5xl font-black tracking-tight">Not chat. Mission control.</h1>
               <p className="mt-3 max-w-3xl text-muted-foreground">Operate BOS-OMEGA, Kimi planner, 60 n8n tools, heartbeat autonomy, memory, coding/GitHub/Render/VPS lanes, and provider integrations from one UI.</p>
               <div className="mt-5 flex flex-wrap gap-2">{toolDomains.slice(0, 12).map((d) => <span key={d} className="rounded-full border border-card-border bg-background/60 px-3 py-1 text-xs font-bold uppercase text-muted-foreground">{d}</span>)}</div>
