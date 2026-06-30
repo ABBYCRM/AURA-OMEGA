@@ -170,14 +170,14 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
     } catch (err) {
-      toast.error("Couldn't rename thread");
+      toast.error("Couldn't rename mission");
     } finally {
       cancelEdit();
     }
   };
 
   const deleteChannel = async (id: number) => {
-    if (!confirm("Delete this thread and all its messages?")) return;
+    if (!confirm("Delete this mission and all its messages?")) return;
     try {
       const res = await fetch(resolveApiUrl(`/api/channels/${id}`), {
         method: "DELETE",
@@ -187,13 +187,13 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
       // If we deleted the active one, route to /
       navigate("/chat");
     } catch (err) {
-      toast.error("Couldn't delete thread");
+      toast.error("Couldn't delete mission");
     }
   };
 
   const handleNewChat = async () => {
     try {
-      const result = await createChannel.mutateAsync({ data: { name: "New chat", type: "general" } });
+      const result = await createChannel.mutateAsync({ data: { name: "New mission", type: "general" } });
       const newId = (result as { id?: number })?.id;
       qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
       if (newId) {
@@ -201,7 +201,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
       }
       onItemClick?.();
     } catch (err) {
-      toast.error("Couldn't create thread");
+      toast.error("Couldn't create mission");
     }
   };
 
@@ -219,7 +219,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
         data-testid="new-chat-button"
       >
         <Plus className="w-4 h-4" />
-        New chat
+        New mission
       </button>
 
       <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
@@ -227,7 +227,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
           <div className="text-[11px] text-muted-foreground/60 px-3 py-2">Loading…</div>
         ) : channels.length === 0 ? (
           <div className="text-[11px] text-muted-foreground/60 px-3 py-2">
-            No threads yet.
+            No missions yet.
           </div>
         ) : (
           channels.map((c) => {
@@ -435,10 +435,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
             mobileDrawerOpen ? "text-primary" : "text-muted-foreground",
           )}
-          aria-label="Open threads"
+          aria-label="Open missions"
         >
           <MessageSquare className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">Threads</span>
+          <span className="text-[10px] font-semibold leading-none">Missions</span>
         </button>
         <button
           onClick={() => navigate("/hermes")}

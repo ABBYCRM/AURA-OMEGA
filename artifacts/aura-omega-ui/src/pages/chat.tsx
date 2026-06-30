@@ -323,7 +323,7 @@ export default function ChatPage() {
 
   // ── Conversation actions ────────────────────────────────────────────────
   const newChat = () =>
-    createChannel.mutate({ data: { name: `New chat`, type: "general" } });
+    createChannel.mutate({ data: { name: `New mission`, type: "general" } });
 
 
   const exportConvo = (fmt: "txt" | "json") => {
@@ -517,7 +517,7 @@ export default function ChatPage() {
                 rows={1}
                 disabled={activeId == null}
                 aria-label="Message"
-                placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : "Message AURA-OMEGA…"}
+                placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : "Describe a mission for AURA-OMEGA…"}
                 className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-[200px]"
               />
               <button
@@ -835,10 +835,10 @@ function EmptyState({ onNew }: { onNew: () => void }) {
       </div>
       <div>
         <h2 className="text-lg font-semibold">Welcome to AURA-OMEGA</h2>
-        <p className="text-sm text-muted-foreground mt-1 max-w-sm">Start a conversation from the operations console. AURA-OMEGA routes goals through the BOS Governor, tool matrix, n8n workflows, and verification ledger.</p>
+        <p className="text-sm text-muted-foreground mt-1 max-w-sm">Every message you send here is a fully autonomous, end-to-end mission — give it one objective and the swarm runs it through to completion. No need to start a new mission for each step or retry; keep following up in the same thread.</p>
       </div>
       <button onClick={onNew} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/25 transition-colors">
-        <Plus className="w-4 h-4" /> New chat
+        <Plus className="w-4 h-4" /> New mission
       </button>
     </div>
   );
@@ -859,8 +859,8 @@ function EmptyConversation({ onPrompt }: { onPrompt: (p: string) => void }) {
         <Bot className="w-7 h-7 text-primary" />
       </div>
       <div className="space-y-1.5">
-        <h2 className="text-lg font-semibold tracking-tight">What should AURA-OMEGA do?</h2>
-        <p className="text-sm text-muted-foreground max-w-xs">Type a goal or pick one below — the swarm handles the rest.</p>
+        <h2 className="text-lg font-semibold tracking-tight">What's the mission?</h2>
+        <p className="text-sm text-muted-foreground max-w-xs">Type a goal or pick one below — the swarm runs it autonomously, end-to-end, in this thread. No need to split it into separate chats.</p>
       </div>
       <div className="grid grid-cols-2 gap-2 w-full max-w-sm px-1 sm:px-0">
         {suggestions.map((s) => (

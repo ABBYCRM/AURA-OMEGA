@@ -71,6 +71,17 @@ This is thrown from `artifacts/api-server/src/lib/integrations.ts` (`llmBaseUrl(
 
 **Fixed as part of this entry:** `MessageRow` in `chat.tsx` now detects `/^Orchestration error:/i` content and renders it as a distinct destructive-styled alert (red `AlertTriangle` icon, "Orchestration failed" label, red bordered box, the operator-goal line shown as a muted sub-line) instead of a plain agent bubble — so a hard failure is now visually unmissable even while the key is still missing.
 
+### 4b. Follow-up — UI reframed around "mission," not "chat" (same session)
+
+The operator clarified the intent behind the thinking-indicator request further: **every message sent to AURA-OMEGA is meant to be a single, fully autonomous, end-to-end mission** — the backend (`orchestrateGoal()` + the swarm dispatch in `lib/mission/swarm-dispatch.ts`) already supports this; nothing there needed to change. The actual problem was UX: a screenshot of the operator's own sidebar showed dozens of separately-named channels for what was really one ongoing piece of work (`task-1-lead-research`, `task-3-nvidia-models`, `run2-leads`, `run2-scraper`, `run2-nvidia`, `run2-report`, `run3-leads`, `run3-scraper`, `run3-nvidia`, ...) — almost certainly because, combined with the missing-`NVIDIA_API_KEY` outage above, every attempt silently died and the operator kept starting fresh chats to retry instead of continuing in one thread.
+
+**Fix (copy/labeling only, zero backend changes):**
+- `AppLayout.tsx` + `chat.tsx`: "New chat" → "New mission" (button labels, default channel name on creation, mobile bottom-nav label, sidebar empty-state text, toasts for rename/delete/create).
+- `EmptyState` / `EmptyConversation` in `chat.tsx`: copy now explicitly says each thread is one fully autonomous mission and that follow-ups belong in the *same* thread, not a new one.
+- Composer placeholder: `"Message AURA-OMEGA…"` → `"Describe a mission for AURA-OMEGA…"`.
+
+If you're a future AI and the operator is still creating many fragmented channels for one task after this ships, the next lever to pull is probably making `/missions` (the Mission Kernel — already exists, see `artifacts/api-server/src/routes/missions.ts`) the front-and-center surface instead of `/chat`, rather than further copy tweaks.
+
 ### 5. Open / not yet done
 
 - The 7 QA-audit bugs in the table above are **reported, not fixed** (user had not yet confirmed whether to fix them when this entry was written).
