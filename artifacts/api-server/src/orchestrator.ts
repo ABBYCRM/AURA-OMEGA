@@ -34,6 +34,7 @@ import {
   RESEARCH_PLAYBOOKS,
   SWARM_SAFETY_RULES,
   CODING_LIFECYCLE_DOCTRINE,
+  ERROR_RECOVERY_DOCTRINE,
   buildVaultCard,
 } from "./routes/ai";
 import { isSwarmPaused } from "./routes/swarm";
@@ -494,10 +495,10 @@ export async function executeAgentCommand(opts: {
       AGENT_PERSONAS[agent.id] ??
       `You are ${agent.name}, an autonomous agent of the ABBY AURA swarm. Execute directives precisely.`;
     const toolGuide = toolNames.length
-      ? `\n\nYou are an autonomous tool-using agent. Call tools to gather real data and perform real work instead of guessing — chain multiple calls when needed, and avoid repeating a call that already returned (it wastes time and budget). When the directive is fully satisfied, stop calling tools and reply with your final concrete result (no preamble).${buildCapabilityCard(agent.id)}`
+      ? `\n\nYou are an autonomous tool-using agent. Call tools to gather real data and perform real work instead of guessing — chain multiple calls when needed, and avoid repeating a call that already returned (it wastes time and budget). ON TOOL ERROR: search memory_search first, then web_search/jina_read for the fix — never give up on the first failure. When the directive is fully satisfied, stop calling tools and reply with your final concrete result (no preamble).${buildCapabilityCard(agent.id)}`
       : "";
     const _agentPersonality = readSettings().systemPersonality?.trim() ?? "";
-    const system = (_agentPersonality ? _agentPersonality + "\n\n" : "") + persona + toolGuide + skillHint + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + (await buildVaultCard());
+    const system = (_agentPersonality ? _agentPersonality + "\n\n" : "") + persona + toolGuide + skillHint + EXECUTION_DOCTRINE + RESEARCH_PLAYBOOKS + ANTI_HALLUCINATION_DIRECTIVE + SWARM_SAFETY_RULES + CODING_LIFECYCLE_DOCTRINE + ERROR_RECOVERY_DOCTRINE + (await buildVaultCard());
 
     const messages: ChatMessage[] = [
       { role: "system", content: system },
