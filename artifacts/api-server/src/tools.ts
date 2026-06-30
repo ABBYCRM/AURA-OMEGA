@@ -17,6 +17,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { swarmPost, swarmRead } from "./lib/swarm-bus";
+import { scratchWrite } from "./lib/agentScratch";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1877,6 +1878,33 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
       }
     },
   },
+
+  scratch_write: {
+    name: "scratch_write",
+    description:
+      "Write an intermediate reasoning note to the operator-visible working scratchpad for this task. Use this to record hypotheses, sub-task results, todos, and key findings AS YOU WORK so the operator can follow along in real time. Cleared automatically at the start of each new task.",
+    parameters: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The note to record (keep it concise but informative)." },
+        type: {
+          type: "string",
+          enum: ["thought", "hypothesis", "result", "todo", "note"],
+          description: "Category: thought (reasoning step), hypothesis (testable idea), result (finding), todo (next action), note (misc).",
+        },
+      },
+      required: ["content", "type"],
+    },
+    run: async (args, ctx) => {
+      const content = String(args["content"] ?? "").slice(0, 1000);
+      const type = String(args["type"] ?? "note") as "thought" | "hypothesis" | "result" | "todo" | "note";
+      if (!content) return "error: content is required.";
+      const channelId = ctx?.channelId ?? 0;
+      const agentName = ctx?.agentName ?? "Agent";
+      scratchWrite(channelId, agentName, type, content);
+      return "noted";
+    },
+  },
 };
 
 // ─── Per-agent tool permissions ──────────────────────────────────────────────
@@ -1887,11 +1915,11 @@ const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
 
 export const AGENT_TOOLS: Record<number, string[]> = {
   1: ALL_TOOLS, // ABBY — full authority
-  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "do_exec", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-1 — code + persistent workspace
-  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "jina_read", "deep_research", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-2 — browser
-  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "jina_read", "deep_research", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-3 — memory/RAG
-  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "send_email", "text_to_speech", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-4 — APIs + scheduling
-  6: ["web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "send_email", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read"], // AURA-5 — social
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "do_exec", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-1 — code + persistent workspace
+  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "jina_read", "deep_research", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-2 — browser
+  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "jina_read", "deep_research", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-3 — memory/RAG
+  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "send_email", "text_to_speech", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-4 — APIs + scheduling
+  6: ["web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "send_email", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-5 — social
 };
 
 export function getToolNamesForAgent(agentId: number): string[] {
