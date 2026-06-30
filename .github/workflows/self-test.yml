@@ -5,14 +5,8 @@ name: Self-Test (build · tests · endpoints · Playwright UI)
 # Evidence is uploaded as an artifact. A red self-test is a real signal.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'artifacts/api-server/dist/**'
-      - 'artifacts/aura-omega-ui/dist/**'
-      - '.agents/**'
-      - '**.md'
-  pull_request:
+  # Manual only — runs automatically on push consume too many GitHub Actions minutes.
+  # Trigger via Actions tab → Self-Test → Run workflow when you want a full check.
   workflow_dispatch:
 
 jobs:

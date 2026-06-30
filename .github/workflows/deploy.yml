@@ -1,62 +1,19 @@
 name: Build & Deploy to Render
 
+# Dist is always pre-built and committed before push.
+# Render buildCommand = "echo dist is prebuilt" — no build needed here.
+# This job only pings the Render deploy API to trigger a fast redeploy.
 on:
   push:
     branches: [main]
     paths-ignore:
-      - 'artifacts/api-server/dist/**'
-      - 'artifacts/aura-omega-ui/dist/**'
-      - '.agents/**'
       - '**.md'
+      - '.agents/**'
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: '10'
-
-      - name: Setup Node.js 24
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Test API server
-        run: pnpm --filter @workspace/api-server run test
-
-      - name: Build API server
-        run: pnpm --filter @workspace/api-server run build
-
-      - name: Build frontend
-        run: PORT=10000 BASE_PATH=/ pnpm --filter @workspace/aura-omega-ui run build
-
-      - name: Commit built dist
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f artifacts/api-server/dist/ artifacts/aura-omega-ui/dist/
-          if git diff --cached --quiet; then
-            echo "No dist changes — skipping commit"
-          else
-            git commit -m "build: update dist bundle [skip ci]"
-            git push origin HEAD:main
-          fi
-
       - name: Trigger Render deploy
         run: |
           curl -s -o /dev/null -w "Render deploy: HTTP %{http_code}\n" \
