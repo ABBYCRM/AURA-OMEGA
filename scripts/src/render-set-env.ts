@@ -48,6 +48,29 @@ const MANAGED_KEYS = [
   "INNGEST_SIGNING_KEY",
   "E2B_API_KEY",
   "SANDBOX_GITHUB_TOKEN",
+  // DigitalOcean infrastructure
+  "DO_API_KEY",
+  "DO_RELAY_IPS",
+  "DO_WORKSPACE_URL",
+  "DO_WORKSPACE_TOKEN",
+  "RELAY_AUTH_TOKEN",
+  // Scraping providers
+  "SCRAPINGBEE_API_KEY",
+  "SCRAPFLY_API_KEY",
+  "SCREENSHOTONE_ACCESS_KEY",
+  // LLM providers
+  "NVIDIA_API_KEY",
+  "KIMI_API_KEY",
+  "KIMI_BASE_URL",
+  "KIMI_MODEL",
+  // Comms & integrations
+  "DISCORD_BOT_TOKEN",
+  "DISCORD_CHANNEL_ID",
+  "DISCORD_GUILD_ID",
+  "DISCORD_BRIDGE_ENABLED",
+  "RESEND_API_KEY",
+  // Public base URL
+  "PUBLIC_BASE_URL",
 ] as const;
 
 function requireEnv(key: string): string {
