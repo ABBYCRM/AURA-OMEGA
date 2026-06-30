@@ -11,8 +11,17 @@ import { TOOL_INTENT_VECTOR_REGISTRY, selectToolIntent, validateToolIntentVector
 import { getInternalAutonomySnapshot, runInternalAutonomyJobNow, startInternalAutonomyLoop, stopInternalAutonomyLoop } from "../lib/n8n/internalAutonomy";
 import { executeN8nWebhook } from "../lib/n8n/webhookExecutor";
 import { reviewMvp } from "../lib/mvpGovernor";
+import { requireOperator } from "../lib/auth";
 
 const router = Router();
+
+// Every route here is dashboard-driven and gated, except the inbound
+// /n8n/webhook/* receiver — n8n itself calls that and can't carry our
+// session cookie.
+router.use((req, res, next) => {
+  if (req.path.startsWith("/n8n/webhook/")) { next(); return; }
+  requireOperator(req, res, next);
+});
 
 function normalizePriority(priority: N8nWorkflowTask["priority"]): "low" | "normal" | "high" {
   return priority === "critical" ? "high" : priority;

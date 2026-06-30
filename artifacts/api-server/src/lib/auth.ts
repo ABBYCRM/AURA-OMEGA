@@ -7,17 +7,23 @@ import {
 import type { Request, Response, NextFunction } from "express";
 
 /**
- * Operator authentication for AURA-OMEGA.
+ * User authentication for AURA-OMEGA.
  *
- * Protected routes (currently the secrets vault) may only be reached by a
- * signed-in operator. An operator authenticates with a single shared password
- * (`OPERATOR_PASSWORD`). On success we mint a stateless, HMAC-signed session
- * token (signed with a key derived from `SESSION_SECRET`) and set it as an
- * HttpOnly cookie. Every protected request is re-validated against that token.
+ * Protected routes may only be reached by a signed-in named user. Accounts are
+ * configured via the `AUTH_USERS` env var — semicolon-separated entries of
+ * `username:password:Display Name`. On success we mint a stateless,
+ * HMAC-signed session token (signed with a key derived from `SESSION_SECRET`)
+ * carrying the username as `sub`, and set it as an HttpOnly cookie. Every
+ * protected request is re-validated against that token, including a live
+ * recheck that the username is still configured — removing a user from
+ * `AUTH_USERS` immediately invalidates their outstanding sessions.
  *
- * We fail closed: if `OPERATOR_PASSWORD` or `SESSION_SECRET` is unset, no token
- * can ever be minted or verified, so protected routes reject every caller. The
- * vault is locked rather than silently open.
+ * `OPERATOR_PASSWORD` is kept as a legacy fallback (username "operator") so an
+ * in-flight deploy never locks everyone out while `AUTH_USERS` propagates.
+ *
+ * We fail closed: if no users are configured or `SESSION_SECRET` is unset, no
+ * token can ever be minted or verified, so protected routes reject every
+ * caller. The vault is locked rather than silently open.
  */
 
 export const SESSION_COOKIE = "aura-omega-ui_session";
@@ -46,13 +52,59 @@ function sign(payload: string): string {
   return createHmac("sha256", getSigningKey()).update(payload).digest("base64url");
 }
 
-/** True only when the configured operator password is present and matches. */
-export function verifyPassword(provided: unknown): boolean {
-  const expected = process.env["OPERATOR_PASSWORD"];
-  if (!expected || typeof provided !== "string" || provided.length === 0) {
-    return false;
+interface AuthUser {
+  username: string;
+  password: string;
+  displayName: string;
+}
+
+/** Parse `AUTH_USERS` (`username:password:Display Name;...`) plus the legacy
+ *  single-password fallback. Re-read on every call — never cached — so a
+ *  Render env var change takes effect without a restart. */
+function getConfiguredUsers(): AuthUser[] {
+  const users: AuthUser[] = [];
+  const raw = process.env["AUTH_USERS"];
+  if (raw) {
+    for (const entry of raw.split(";")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const [username, password, ...rest] = trimmed.split(":");
+      if (!username || !password) continue;
+      users.push({
+        username: username.trim().toLowerCase(),
+        password,
+        displayName: rest.join(":").trim() || username,
+      });
+    }
   }
-  return timingSafeStrEqual(provided, expected);
+  const legacy = process.env["OPERATOR_PASSWORD"];
+  if (legacy && !users.some((u) => u.username === "operator")) {
+    users.push({ username: "operator", password: legacy, displayName: "Operator" });
+  }
+  return users;
+}
+
+/** Verify a username/password pair against configured users. Returns the
+ *  canonical (lowercased) username on success, or null on any failure. */
+export function verifyCredentials(username: unknown, password: unknown): string | null {
+  if (
+    typeof username !== "string" || typeof password !== "string" ||
+    username.length === 0 || password.length === 0
+  ) {
+    return null;
+  }
+  const normalized = username.trim().toLowerCase();
+  for (const user of getConfiguredUsers()) {
+    if (user.username === normalized && timingSafeStrEqual(password, user.password)) {
+      return user.username;
+    }
+  }
+  return null;
+}
+
+/** Display name for a username, falling back to the username itself. */
+export function displayNameFor(username: string): string {
+  return getConfiguredUsers().find((u) => u.username === username)?.displayName ?? username;
 }
 
 /**
@@ -68,10 +120,10 @@ export function timingSafeStrEqual(a: string, b: string): boolean {
 }
 const TIMING_SALT = randomBytes(32);
 
-/** Mint a signed session token that expires after SESSION_TTL_SECONDS. */
-export function issueSessionToken(): string {
+/** Mint a signed session token for `username` that expires after SESSION_TTL_SECONDS. */
+export function issueSessionToken(username: string): string {
   const payload = {
-    sub: "operator",
+    sub: username,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
     nonce: randomBytes(8).toString("hex"),
@@ -80,27 +132,29 @@ export function issueSessionToken(): string {
   return `${body}.${sign(body)}`;
 }
 
-/** Validate a session token's signature and expiry. */
-export function verifySessionToken(token: string | undefined | null): boolean {
-  if (!token) return false;
-  // Auth is only possible when a password is configured; without it, fail closed.
-  if (!process.env["OPERATOR_PASSWORD"]) return false;
+/** Validate a session token's signature, expiry, and that its username is
+ *  still configured. Returns the username on success, or null on any failure. */
+export function verifySessionToken(token: string | undefined | null): string | null {
+  if (!token) return null;
+  const users = getConfiguredUsers();
+  // Auth is only possible when at least one user is configured; otherwise fail closed.
+  if (users.length === 0) return null;
 
   const parts = token.split(".");
-  if (parts.length !== 2) return false;
+  if (parts.length !== 2) return null;
   const [body, mac] = parts;
 
   let expectedMac: string;
   try {
     expectedMac = sign(body);
   } catch {
-    return false; // SESSION_SECRET missing → fail closed
+    return null; // SESSION_SECRET missing → fail closed
   }
 
   const macBuf = Buffer.from(mac);
   const expBuf = Buffer.from(expectedMac);
   if (macBuf.length !== expBuf.length || !timingSafeEqual(macBuf, expBuf)) {
-    return false;
+    return null;
   }
 
   try {
@@ -108,13 +162,14 @@ export function verifySessionToken(token: string | undefined | null): boolean {
       exp?: number;
       sub?: string;
     };
-    if (payload.sub !== "operator") return false;
+    if (typeof payload.sub !== "string") return null;
     if (typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000)) {
-      return false;
+      return null;
     }
-    return true;
+    if (!users.some((u) => u.username === payload.sub)) return null;
+    return payload.sub;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -149,14 +204,17 @@ function extractToken(req: Request): string | null {
 }
 
 /**
- * Express middleware that rejects any request lacking a valid operator session.
+ * Express middleware that rejects any request lacking a valid user session.
  * Responses are intentionally generic so anonymous callers learn nothing about
- * the protected resource (e.g. stored secret names).
+ * the protected resource (e.g. stored secret names). On success, attaches the
+ * signed-in username to `req.authUser`.
  */
 export function requireOperator(req: Request, res: Response, next: NextFunction): void {
-  if (verifySessionToken(extractToken(req))) {
+  const user = verifySessionToken(extractToken(req));
+  if (user) {
+    (req as Request & { authUser?: string }).authUser = user;
     next();
     return;
   }
-  res.status(401).json({ error: "Unauthorized — operator sign-in required" });
+  res.status(401).json({ error: "Unauthorized — sign-in required" });
 }

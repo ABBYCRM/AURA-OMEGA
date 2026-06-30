@@ -35,36 +35,44 @@ import { requireOperator } from "../lib/auth";
 
 const router: IRouter = Router();
 
+// Open: health checks (Render needs these reachable with no auth), the
+// login/logout/me endpoints themselves, the external API (gated by its own
+// AURA_OMEGA_API_KEY, not a browser session), and the world router (which
+// manages its own selective public/operator split). n8nRouter gates itself
+// internally so its inbound webhook receiver stays reachable. Everything
+// else is the dashboard surface — gated so only the 3 signed-in users can
+// reach it.
 router.use(healthRouter);
-router.use("/agents", agentsRouter);
-router.use("/channels", channelsRouter);
-router.use("/tasks", tasksRouter);
-router.use(telemetryRouter);
-router.use("/swarm", swarmRouter);
-router.use(commandsRouter);
-router.use(steelRouter);
-router.use(aiRouter);
-router.use("/discord", discordRouter);
-router.use(n8nRouter);
-router.use(mvpGovernorRouter);
-router.use(settingsRouter);
-router.use("/", scratchpadRouter);
-router.use("/", agentScratchRouter);
-router.use(uploadsRouter);
-router.use(worldRouter);
-router.use(externalRouter);
-router.use(integrationsRouter);
-router.use(selfCheckRouter);
 router.use(authRouter);
-router.use("/hermes", hermesRouter);
-router.use("/openhands", openhandsRouter);
-router.use("/crawl4ai", crawl4aiRouter);
-router.use("/mem0", mem0Router);
-router.use("/docling", doclingRouter);
-router.use("/knowledge", knowledgeRouter);
-router.use("/devices", devicesRouter);
-router.use("/missions", missionsRouter);
-router.use(referenceRouter);
+router.use(externalRouter);
+router.use(worldRouter);
+router.use(n8nRouter);
+
+router.use("/agents", requireOperator, agentsRouter);
+router.use("/channels", requireOperator, channelsRouter);
+router.use("/tasks", requireOperator, tasksRouter);
+router.use(requireOperator, telemetryRouter);
+router.use("/swarm", requireOperator, swarmRouter);
+router.use(requireOperator, commandsRouter);
+router.use(requireOperator, steelRouter);
+router.use(requireOperator, aiRouter);
+router.use("/discord", requireOperator, discordRouter);
+router.use(requireOperator, mvpGovernorRouter);
+router.use(requireOperator, settingsRouter);
+router.use("/", requireOperator, scratchpadRouter);
+router.use("/", requireOperator, agentScratchRouter);
+router.use(requireOperator, uploadsRouter);
+router.use(requireOperator, integrationsRouter);
+router.use(requireOperator, selfCheckRouter);
+router.use("/hermes", requireOperator, hermesRouter);
+router.use("/openhands", requireOperator, openhandsRouter);
+router.use("/crawl4ai", requireOperator, crawl4aiRouter);
+router.use("/mem0", requireOperator, mem0Router);
+router.use("/docling", requireOperator, doclingRouter);
+router.use("/knowledge", requireOperator, knowledgeRouter);
+router.use("/devices", requireOperator, devicesRouter);
+router.use("/missions", requireOperator, missionsRouter);
+router.use(requireOperator, referenceRouter);
 router.use(requireOperator, vaultRouter);
 router.use(requireOperator, socialRouter);
 

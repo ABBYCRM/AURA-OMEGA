@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 
 vi.mock("@workspace/db", async (importOriginal) => {
@@ -9,6 +9,9 @@ vi.mock("@workspace/db", async (importOriginal) => {
 
 import app from "../app";
 import { queueDbResults, resetDbMock } from "../test/dbMock";
+
+const ORIGINAL_ENV = { ...process.env };
+const agent = request.agent(app);
 
 const sampleAgent = {
   id: 1,
@@ -25,14 +28,21 @@ const sampleAgent = {
   createdAt: new Date("2026-01-01T00:00:00.000Z"),
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   resetDbMock();
+  process.env["SESSION_SECRET"] = "test-session-secret";
+  process.env["AUTH_USERS"] = "tester:test-pass:Test User";
+  await agent.post("/api/auth/login").send({ username: "tester", password: "test-pass" });
+});
+
+afterEach(() => {
+  process.env = { ...ORIGINAL_ENV };
 });
 
 describe("GET /api/agents", () => {
   it("returns 200 with a list of agents (dates serialized)", async () => {
     queueDbResults([sampleAgent]);
-    const res = await request(app).get("/api/agents");
+    const res = await agent.get("/api/agents");
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].id).toBe(1);
@@ -41,7 +51,7 @@ describe("GET /api/agents", () => {
 
   it("returns 500 when the database fails", async () => {
     queueDbResults(new Error("db down"));
-    const res = await request(app).get("/api/agents");
+    const res = await agent.get("/api/agents");
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to list agents" });
   });
@@ -50,7 +60,7 @@ describe("GET /api/agents", () => {
 describe("POST /api/agents", () => {
   it("returns 201 with the created agent", async () => {
     queueDbResults([sampleAgent]);
-    const res = await request(app)
+    const res = await agent
       .post("/api/agents")
       .send({ name: "ABBY", role: "Orchestrator", color: "#00e5ff" });
     expect(res.status).toBe(201);
@@ -59,14 +69,14 @@ describe("POST /api/agents", () => {
   });
 
   it("returns 400 for invalid agent data", async () => {
-    const res = await request(app).post("/api/agents").send({ role: "Orchestrator" });
+    const res = await agent.post("/api/agents").send({ role: "Orchestrator" });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Invalid agent data" });
   });
 
   it("returns 500 when the insert fails", async () => {
     queueDbResults(new Error("insert failed"));
-    const res = await request(app)
+    const res = await agent
       .post("/api/agents")
       .send({ name: "ABBY", role: "Orchestrator", color: "#00e5ff" });
     expect(res.status).toBe(500);
@@ -77,27 +87,27 @@ describe("POST /api/agents", () => {
 describe("GET /api/agents/:agentId", () => {
   it("returns 200 with the agent", async () => {
     queueDbResults([sampleAgent]);
-    const res = await request(app).get("/api/agents/1");
+    const res = await agent.get("/api/agents/1");
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(1);
   });
 
   it("returns 400 for a non-numeric id", async () => {
-    const res = await request(app).get("/api/agents/abc");
+    const res = await agent.get("/api/agents/abc");
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Invalid ID" });
   });
 
   it("returns 404 when the agent is not found", async () => {
     queueDbResults([]);
-    const res = await request(app).get("/api/agents/999");
+    const res = await agent.get("/api/agents/999");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Agent not found" });
   });
 
   it("returns 500 when the lookup fails", async () => {
     queueDbResults(new Error("select failed"));
-    const res = await request(app).get("/api/agents/1");
+    const res = await agent.get("/api/agents/1");
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to get agent" });
   });
@@ -106,33 +116,33 @@ describe("GET /api/agents/:agentId", () => {
 describe("PATCH /api/agents/:agentId", () => {
   it("returns 200 with the updated agent", async () => {
     queueDbResults([{ ...sampleAgent, status: "thinking" }]);
-    const res = await request(app).patch("/api/agents/1").send({ status: "thinking" });
+    const res = await agent.patch("/api/agents/1").send({ status: "thinking" });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("thinking");
   });
 
   it("returns 400 for a non-numeric id", async () => {
-    const res = await request(app).patch("/api/agents/abc").send({ status: "thinking" });
+    const res = await agent.patch("/api/agents/abc").send({ status: "thinking" });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Invalid ID" });
   });
 
   it("returns 400 for an invalid status", async () => {
-    const res = await request(app).patch("/api/agents/1").send({ status: "bogus" });
+    const res = await agent.patch("/api/agents/1").send({ status: "bogus" });
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Invalid status" });
   });
 
   it("returns 404 when the agent is not found", async () => {
     queueDbResults([]);
-    const res = await request(app).patch("/api/agents/999").send({ status: "thinking" });
+    const res = await agent.patch("/api/agents/999").send({ status: "thinking" });
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Agent not found" });
   });
 
   it("returns 500 when the update fails", async () => {
     queueDbResults(new Error("update failed"));
-    const res = await request(app).patch("/api/agents/1").send({ status: "thinking" });
+    const res = await agent.patch("/api/agents/1").send({ status: "thinking" });
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to update agent" });
   });

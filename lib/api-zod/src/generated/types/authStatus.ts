@@ -8,4 +8,6 @@
 
 export interface AuthStatus {
   authenticated: boolean;
+  username?: string;
+  displayName?: string;
 }

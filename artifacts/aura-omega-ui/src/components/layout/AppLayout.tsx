@@ -21,6 +21,7 @@ import {
   Boxes,
   Smartphone,
   Rocket,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -29,6 +30,9 @@ import {
   useCreateChannel,
   getListChannelsQueryKey,
   resolveApiUrl,
+  useGetAuthStatus,
+  useLogout,
+  getGetAuthStatusQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -297,6 +301,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const [heartbeat, setHeartbeat] = useState<"online" | "offline" | "unknown">("unknown");
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const qc = useQueryClient();
+  const { data: authStatus } = useGetAuthStatus();
+  const logout = useLogout();
+
+  const handleLogout = async () => {
+    await logout.mutateAsync();
+    qc.invalidateQueries({ queryKey: getGetAuthStatusQueryKey() });
+  };
 
   useEffect(() => {
     let alive = true;
@@ -360,6 +372,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               {heartbeat === "online" ? "Online" : heartbeat === "offline" ? "Offline" : "Checking…"}
             </span>
           </div>
+          {authStatus?.authenticated && (
+            <button
+              onClick={handleLogout}
+              disabled={logout.isPending}
+              className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
+              data-testid="logout-button"
+            >
+              <LogOut className="w-4 h-4 shrink-0" />
+              <span className="flex-1 text-left truncate">{authStatus.displayName ?? authStatus.username}</span>
+            </button>
+          )}
         </div>
       </aside>
 

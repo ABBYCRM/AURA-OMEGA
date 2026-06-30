@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
 import { pool } from "@workspace/db";
 import { runMigrations } from "../migrate";
+import { requireOperator } from "../lib/auth";
 
 const router: IRouter = Router();
 
@@ -11,8 +12,7 @@ router.get("/healthz", (_req, res) => {
 });
 
 // Debug: dump env vars (no secrets exposed — only lengths and prefixes)
-// Mounted under /healthz so it bypasses auth.
-router.get("/env", (_req, res) => {
+router.get("/env", requireOperator, (_req, res) => {
   const keys = ['DATABASE_URL', 'NVIDIA_API_KEY', 'NVIDIA_API_KEYS', 'DEPLOY_VERSION', 'SCRAPINGBEE_API_KEY', 'KIMI_API_KEY', 'ABBY_MODEL', 'PORT', 'NODE_ENV'];
   const result: Record<string, { len: number; prefix: string }> = {};
   for (const k of keys) {
@@ -24,10 +24,9 @@ router.get("/env", (_req, res) => {
   res.json({ env: result, nvidiaKeyCount: nvidiaKeys().length, timestamp: new Date().toISOString() });
 });
 
-// Diagnostic: force-run migrations + seed. No auth — health router is open.
+// Diagnostic: force-run migrations + seed.
 // Uses pool directly (not runMigrations which swallows errors internally).
-// TODO: remove after successful seed — 2026-06-29
-router.post("/seed", async (_req, res) => {
+router.post("/seed", requireOperator, async (_req, res) => {
   let client;
   const logs: string[] = [];
   try {

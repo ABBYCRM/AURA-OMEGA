@@ -24,7 +24,7 @@ afterEach(() => {
 
 /** Log in and return the session cookie string for authenticated requests. */
 async function loginCookie(): Promise<string> {
-  const res = await request(app).post("/api/auth/login").send({ password: "hunter2" });
+  const res = await request(app).post("/api/auth/login").send({ username: "operator", password: "hunter2" });
   expect(res.status).toBe(200);
   const setCookie = res.headers["set-cookie"];
   return Array.isArray(setCookie) ? setCookie[0] : (setCookie as unknown as string);
@@ -80,7 +80,7 @@ describe("vault auth gating", () => {
 
 describe("operator auth routes", () => {
   it("rejects login with a wrong password", async () => {
-    const res = await request(app).post("/api/auth/login").send({ password: "wrong" });
+    const res = await request(app).post("/api/auth/login").send({ username: "operator", password: "wrong" });
     expect(res.status).toBe(401);
     expect(res.headers["set-cookie"]).toBeUndefined();
   });
@@ -97,9 +97,10 @@ describe("operator auth routes", () => {
     expect(res.body.authenticated).toBe(true);
   });
 
-  it("fails closed when OPERATOR_PASSWORD is unset", async () => {
+  it("fails closed when no users are configured", async () => {
     delete process.env["OPERATOR_PASSWORD"];
-    const res = await request(app).post("/api/auth/login").send({ password: "anything" });
+    delete process.env["AUTH_USERS"];
+    const res = await request(app).post("/api/auth/login").send({ username: "operator", password: "anything" });
     expect(res.status).toBe(401);
   });
 });

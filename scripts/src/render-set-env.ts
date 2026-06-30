@@ -48,6 +48,8 @@ const MANAGED_KEYS = [
   "INNGEST_SIGNING_KEY",
   "E2B_API_KEY",
   "SANDBOX_GITHUB_TOKEN",
+  // App auth (SESSION_SECRET is intentionally excluded — never rotate it)
+  "AUTH_USERS",
   // DigitalOcean infrastructure
   "DO_API_KEY",
   "DO_RELAY_IPS",

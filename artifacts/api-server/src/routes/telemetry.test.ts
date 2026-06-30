@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import request from "supertest";
 
 vi.mock("@workspace/db", async (importOriginal) => {
@@ -9,6 +9,9 @@ vi.mock("@workspace/db", async (importOriginal) => {
 
 import app from "../app";
 import { queueDbResults, resetDbMock } from "../test/dbMock";
+
+const ORIGINAL_ENV = { ...process.env };
+const agent = request.agent(app);
 
 const sampleAgent = {
   id: 1,
@@ -55,15 +58,22 @@ const sampleTask = {
   completedAt: null,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   resetDbMock();
+  process.env["SESSION_SECRET"] = "test-session-secret";
+  process.env["AUTH_USERS"] = "tester:test-pass:Test User";
+  await agent.post("/api/auth/login").send({ username: "tester", password: "test-pass" });
+});
+
+afterEach(() => {
+  process.env = { ...ORIGINAL_ENV };
 });
 
 describe("GET /api/agents/:agentId/telemetry", () => {
   it("returns 200 with telemetry payload", async () => {
     // agent lookup, monologue, tool calls
     queueDbResults([sampleAgent], [sampleMonologue], [sampleToolCall]);
-    const res = await request(app).get("/api/agents/1/telemetry");
+    const res = await agent.get("/api/agents/1/telemetry");
     expect(res.status).toBe(200);
     expect(res.body.agentId).toBe(1);
     expect(res.body.monologue[0].timestamp).toBe("2026-01-02T00:00:00.000Z");
@@ -73,21 +83,21 @@ describe("GET /api/agents/:agentId/telemetry", () => {
   });
 
   it("returns 400 for a non-numeric agent id", async () => {
-    const res = await request(app).get("/api/agents/abc/telemetry");
+    const res = await agent.get("/api/agents/abc/telemetry");
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Invalid agent ID" });
   });
 
   it("returns 404 when the agent is not found", async () => {
     queueDbResults([]);
-    const res = await request(app).get("/api/agents/999/telemetry");
+    const res = await agent.get("/api/agents/999/telemetry");
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: "Agent not found" });
   });
 
   it("returns 500 when a query fails", async () => {
     queueDbResults(new Error("select failed"));
-    const res = await request(app).get("/api/agents/1/telemetry");
+    const res = await agent.get("/api/agents/1/telemetry");
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to get telemetry" });
   });
@@ -96,21 +106,21 @@ describe("GET /api/agents/:agentId/telemetry", () => {
 describe("GET /api/agents/:agentId/tasks", () => {
   it("returns 200 with the agent's tasks", async () => {
     queueDbResults([sampleTask]);
-    const res = await request(app).get("/api/agents/1/tasks");
+    const res = await agent.get("/api/agents/1/tasks");
     expect(res.status).toBe(200);
     expect(res.body[0].title).toBe("Crawl site");
     expect(res.body[0].createdAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
   it("returns 400 for a non-numeric agent id", async () => {
-    const res = await request(app).get("/api/agents/abc/tasks");
+    const res = await agent.get("/api/agents/abc/tasks");
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: "Invalid agent ID" });
   });
 
   it("returns 500 when the query fails", async () => {
     queueDbResults(new Error("select failed"));
-    const res = await request(app).get("/api/agents/1/tasks");
+    const res = await agent.get("/api/agents/1/tasks");
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: "Failed to get agent tasks" });
   });

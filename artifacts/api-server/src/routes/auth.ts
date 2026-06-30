@@ -1,24 +1,26 @@
 import { Router } from "express";
 import {
   SESSION_COOKIE,
+  displayNameFor,
   issueSessionToken,
   sessionCookieOptions,
-  verifyPassword,
+  verifyCredentials,
   verifySessionToken,
 } from "../lib/auth";
 
 const router = Router();
 
-// Sign in as an operator. Issues an HttpOnly session cookie on success.
+// Sign in as a named user. Issues an HttpOnly session cookie on success.
 router.post("/auth/login", (req, res) => {
-  const password = (req.body as { password?: unknown } | undefined)?.password;
-  if (!verifyPassword(password)) {
-    res.status(401).json({ error: "Invalid operator password" });
+  const body = req.body as { username?: unknown; password?: unknown } | undefined;
+  const username = verifyCredentials(body?.username, body?.password);
+  if (!username) {
+    res.status(401).json({ error: "Invalid username or password" });
     return;
   }
-  const token = issueSessionToken();
+  const token = issueSessionToken(username);
   res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
-  res.status(200).json({ authenticated: true });
+  res.status(200).json({ authenticated: true, username, displayName: displayNameFor(username) });
 });
 
 // Sign out — clears the session cookie.
@@ -28,10 +30,15 @@ router.post("/auth/logout", (_req, res) => {
   res.status(200).json({ authenticated: false });
 });
 
-// Report whether the caller currently holds a valid operator session.
+// Report whether the caller currently holds a valid session.
 router.get("/auth/me", (req, res) => {
   const token = req.cookies?.[SESSION_COOKIE];
-  res.status(200).json({ authenticated: verifySessionToken(token) });
+  const username = verifySessionToken(token);
+  if (!username) {
+    res.status(200).json({ authenticated: false });
+    return;
+  }
+  res.status(200).json({ authenticated: true, username, displayName: displayNameFor(username) });
 });
 
 export default router;
