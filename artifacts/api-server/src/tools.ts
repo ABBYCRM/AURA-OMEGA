@@ -409,21 +409,45 @@ async function steelScrapeOnce(url: string, useProxy: boolean): Promise<string> 
   return (data["markdown"] as string) || JSON.stringify(data);
 }
 
+/** ScrapingBee residential proxy scrape — last resort when Steel is blocked. */
+async function scrapingBeeScrape(url: string): Promise<string> {
+  const sbKey = process.env["SCRAPINGBEE_API_KEY"];
+  if (!sbKey) throw new Error("SCRAPINGBEE_API_KEY not set");
+  const endpoint = `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${encodeURIComponent(url)}&premium_proxy=true&render_js=false`;
+  const r = await fetch(endpoint, { signal: AbortSignal.timeout(25_000) });
+  if (!r.ok) throw new Error(`ScrapingBee ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const html = await r.text();
+  return html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 8000);
+}
+
 /**
- * Real Steel scrape. Tries direct first (fast/cheap); if the page comes back as a
- * bot-wall or empty shell, retries once through Steel's proxy — which defeats the
- * security interstitials that listing/marketplace sites serve to datacenter IPs.
+ * Scrape pipeline: Steel direct → Steel proxy → ScrapingBee residential IP.
+ * Each tier only runs when the prior tier returns a bot-wall or empty shell.
  */
 export async function steelScrape(url: string): Promise<string> {
   const direct = await steelScrapeOnce(url, false);
   if (!scrapeLooksBlocked(direct)) return direct;
   try {
     const viaProxy = await steelScrapeOnce(url, true);
-    // Prefer the proxied result when it actually got through; otherwise keep
-    // whichever has more usable content so we never return less than we had.
     if (!scrapeLooksBlocked(viaProxy)) return viaProxy;
+    // Both Steel tiers blocked — try ScrapingBee residential IPs as last resort
+    if (process.env["SCRAPINGBEE_API_KEY"]) {
+      try {
+        const viaBee = await scrapingBeeScrape(url);
+        if (!scrapeLooksBlocked(viaBee)) return viaBee;
+      } catch { /* fall through */ }
+    }
     return viaProxy.trim().length > direct.trim().length ? viaProxy : direct;
   } catch {
+    if (process.env["SCRAPINGBEE_API_KEY"]) {
+      try { return await scrapingBeeScrape(url); } catch { /* ignore */ }
+    }
     return direct;
   }
 }

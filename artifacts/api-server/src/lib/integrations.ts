@@ -452,12 +452,6 @@ export async function completeChat(
       }
       const headers = llmHeaders();
       try {
-        // Operator doctrine 2026-06-30: route through ScrapingBee residential
-        // proxy when configured. premium_proxy=true picks a fresh residential
-        // IP per request, so each attempt here gets a different IP — automatic
-        // IP rotation without any extra round-robin logic. The Authorization
-        // header is forwarded by ScrapingBee (forward_headers=true) so NVIDIA
-        // sees a normal authenticated request, not a proxy one.
         const r = await fetch(llmRouteUrl("/chat/completions"), {
           method: "POST",
           headers,
@@ -1000,65 +994,32 @@ export function nextRelayBaseUrl(): string {
   return url;
 }
 
-// ─── ScrapingBee Residential Proxy ───────────────────────────────────────────
-// When all direct IPs (Render + CF Workers) are blacklisted by NVIDIA, route
-// through ScrapingBee's residential proxy network. Each request comes from a
-// different residential IP that NVIDIA cannot blacklist. The proxy transparently
-// forwards all headers (including Authorization) so NVIDIA sees a clean request.
+// ─── ScrapingBee ─────────────────────────────────────────────────────────────
+// ScrapingBee is used for WEB SCRAPING only (residential IP rotation for pages
+// that block datacenter IPs). It is NOT used as an NVIDIA proxy — ScrapingBee
+// strips Authorization: Bearer headers, causing 401 on every NVIDIA call.
+// NVIDIA routing always goes direct (llmFetchUrl). Key rotation (28 keys) +
+// dead-key detection + exponential backoff handle NVIDIA rate limits.
 
-/**
- * Build the final fetch URL for an LLM API path.
- * 
- * ScrapingBee residential proxy integration removed 2026-06-29: ScrapingBee
- * cannot forward Authorization Bearer headers to the target (NVIDIA requires
- * this header for auth). The proxy strips/replaces it, causing 401 errors.
- * 
- * Instead, the system relies on:
- *   - 27 NVIDIA keys in round-robin rotation (rate-limit headroom)
- *   - Per-key dead detection with auto-sweep (keys recover after 10 min)
- *   - Smart model fallback (kimi-k2.6 → llama-3.1-70b on 402/429)
- *   - Exponential backoff between attempts
- *   - ScrapingBee residential proxy + IP rotation to avoid NVIDIA IP rate limits
- *     (forward_headers=true passes Authorization through to NVIDIA transparently;
- *     premium_proxy=true picks a fresh residential IP per request)
- */
+/** Direct NVIDIA API URL — always used for LLM calls. */
 export function llmFetchUrl(path: string): string {
   return llmBaseUrl() + (path.startsWith("/") ? path : "/" + path);
 }
 
 /**
- * Override the LLM fetch URL with a route through ScrapingBee residential
- * proxy. Forward all headers (including Authorization) so NVIDIA sees a
- * normal authenticated request from a different IP each time.
- *
- * Returns the ScrapingBee URL when SCRAPINGBEE_API_KEY is set, with a
- * random residential proxy country picked per call. Falls back to the
- * direct NVIDIA URL when ScrapingBee is not configured.
+ * Build a ScrapingBee URL for scraping a public web page.
+ * Use premium_proxy for residential IP rotation, render_js=false for speed
+ * (set render_js=true only for JS-heavy SPAs).
+ * NOT for NVIDIA API calls — ScrapingBee strips Authorization headers.
  */
-export function llmProxyFetchUrl(path: string): string {
-  const base = llmBaseUrl();
-  const fullPath = path.startsWith("/") ? path : "/" + path;
+export function buildScrapingBeeUrl(targetUrl: string, renderJs = false): string {
   const sbKey = process.env["SCRAPINGBEE_API_KEY"];
-  if (sbKey && (base.includes("integrate.api.nvidia") || base.includes("nvidia.helicone"))) {
-    const targetUrl = encodeURIComponent(base + fullPath);
-    // premium_proxy=true = residential IPs (rotates per request automatically);
-    // forward_headers=true = pass Authorization through to NVIDIA.
-    return `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${targetUrl}&forward_headers=true&premium_proxy=true`;
-  }
-  return base + fullPath;
+  if (!sbKey) throw new Error("SCRAPINGBEE_API_KEY not set");
+  return `https://app.scrapingbee.com/api/v1/?api_key=${sbKey}&url=${encodeURIComponent(targetUrl)}&premium_proxy=true&render_js=${renderJs}`;
 }
 
-/**
- * When SCRAPINGBEE_API_KEY is set, route ALL NVIDIA calls through it.
- * When not set, use the direct URL (rely on key rotation only).
- * Operator doctrine 2026-06-30: ScrapingBee proxy MUST be used so we
- * don't bottleneck NVIDIA from a single Render IP, and IP rotation
- * MUST be used so each request hits a fresh residential IP.
- */
+/** Always direct — ScrapingBee is not used for NVIDIA calls. */
 export function llmRouteUrl(path: string): string {
-  if (process.env["SCRAPINGBEE_API_KEY"]) {
-    return llmProxyFetchUrl(path);
-  }
   return llmFetchUrl(path);
 }
 
