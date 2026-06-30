@@ -1056,5 +1056,6 @@ export function integrationStatus(): IntegrationStatus[] {
     { key: "inngest", name: "Inngest", category: "events", envVar: "INNGEST_EVENT_KEY", configured: has("INNGEST_EVENT_KEY") },
     { key: "e2b", name: "E2B", category: "sandbox", envVar: "E2B_API_KEY", configured: has("E2B_API_KEY") },
     { key: "composio", name: "Composio", category: "tools", envVar: "COMPOSIO_API_KEY", configured: has("COMPOSIO_API_KEY") },
+    { key: "digitalocean", name: "DigitalOcean", category: "infrastructure", envVar: "DO_API_KEY", configured: has("DO_API_KEY") },
   ];
 }
