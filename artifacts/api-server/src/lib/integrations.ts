@@ -149,11 +149,19 @@ export function heliconeEnabled(): boolean {
 /**
  * The LLM base URL to use. NVIDIA NIM only (operator directive 2026-06-27).
  * Helicone sits in FRONT of NVIDIA when configured so every call is logged.
+ * When Kimi.com is PRIMARY (KIMI_API_KEY starts with sk-kimi-), routes to api.moonshot.cn.
  */
 export function llmBaseUrl(): string {
-  // NVIDIA NIM is PRIMARY. Kimi.com is fallback only (used in completeChat() tertiary path).
+  // Kimi.com PRIMARY: KIMI_API_KEY starts with sk-kimi- and no NVIDIA keys available.
+  if (kimiPrimary()) {
+    return (process.env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1").replace(/\/$/, "");
+  }
   const keyCount = nvidiaKeys().length;
   if (!nvidiaConfigured()) {
+    // Last-resort: if Kimi is configured as fallback (not primary), still try it.
+    if (kimiApiConfigured()) {
+      return (process.env["KIMI_BASE_URL"] ?? "https://api.moonshot.cn/v1").replace(/\/$/, "");
+    }
     throw new Error("LLM not configured: NVIDIA_API_KEY must be set — keyCount=" + keyCount);
   }
   if (heliconeEnabled()) {
@@ -163,12 +171,16 @@ export function llmBaseUrl(): string {
 }
 
 /**
- * Unified LLM auth + content headers. NVIDIA ONLY (OpenRouter removed).
- * Spreads Helicone headers on top when Helicone is configured (works with both
- * providers). Throws a descriptive error when neither key is set.
+ * Unified LLM auth + content headers.
+ * Priority: NVIDIA NIM (when keys available) → Kimi.com primary → Kimi.com fallback.
  */
 export function llmHeaders(extra?: Record<string, string>): Record<string, string> {
-  // NVIDIA NIM is PRIMARY — always use the NVIDIA key pool.
+  // Kimi PRIMARY path — no NVIDIA key needed.
+  if (kimiPrimary()) {
+    const kimiKey = process.env["KIMI_API_KEY"]!;
+    return { "Authorization": `Bearer ${kimiKey}`, "Content-Type": "application/json", ...extra };
+  }
+  // NVIDIA path.
   const nvidiaKey = nextNvidiaKey();
   if (nvidiaKey) {
     return {
@@ -178,9 +190,15 @@ export function llmHeaders(extra?: Record<string, string>): Record<string, strin
       ...extra,
     };
   }
+  // Kimi fallback when NVIDIA keys exhausted.
+  const kimiKey = process.env["KIMI_API_KEY"];
+  if (kimiKey) {
+    logger.warn("llmHeaders: no NVIDIA key — falling back to kimi.com");
+    return { "Authorization": `Bearer ${kimiKey}`, "Content-Type": "application/json", ...extra };
+  }
   const keyCount = nvidiaKeys().length;
-  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no NVIDIA key available");
-  throw new Error("LLM not configured: NVIDIA_API_KEY must be set — keyCount=" + keyCount);
+  logger.warn({ keyCount, hasPrimary: !!process.env["NVIDIA_API_KEY"] }, "llmHeaders: no LLM key available");
+  throw new Error("LLM not configured: set NVIDIA_API_KEY or KIMI_API_KEY — keyCount=" + keyCount);
 }
 
 /**
