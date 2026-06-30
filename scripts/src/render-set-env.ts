@@ -17,7 +17,7 @@
  * Optional: RENDER_SERVICE_ID to target a different service.
  */
 
-const SERVICE_ID = process.env["RENDER_SERVICE_ID"] || "srv-d8hmeunlk1mc73faoh90";
+const SERVICE_ID = process.env["RENDER_SERVICE_ID"] || "srv-d8u653u7r5hc73f3crvg";
 const RENDER_API = "https://api.render.com/v1";
 
 // Every env var the app understands. Pushed only when present locally; anything

@@ -20,5 +20,5 @@ jobs:
             -X POST \
             -H "Authorization: Bearer ${{ secrets.RENDER_TOKEN }}" \
             -H "Content-Type: application/json" \
-            "https://api.render.com/v1/services/srv-d8hmeunlk1mc73faoh90/deploys" \
+            "https://api.render.com/v1/services/srv-d8u653u7r5hc73f3crvg/deploys" \
             -d '{"clearCache": "do_not_clear"}'
