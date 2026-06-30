@@ -16,9 +16,15 @@ jobs:
     steps:
       - name: Trigger Render deploy
         run: |
-          curl -s -o /dev/null -w "Render deploy: HTTP %{http_code}\n" \
+          HTTP_CODE=$(curl -s -o /tmp/render_resp.json -w "%{http_code}" \
             -X POST \
             -H "Authorization: Bearer ${{ secrets.RENDER_TOKEN }}" \
             -H "Content-Type: application/json" \
             "https://api.render.com/v1/services/srv-d8u653u7r5hc73f3crvg/deploys" \
-            -d '{"clearCache": "do_not_clear"}'
+            -d '{}')
+          echo "Render deploy: HTTP $HTTP_CODE"
+          cat /tmp/render_resp.json || true
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "Deploy trigger failed — check RENDER_TOKEN and service ID"
+            exit 1
+          fi
