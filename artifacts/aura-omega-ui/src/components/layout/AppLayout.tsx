@@ -193,7 +193,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
 
   const handleNewChat = async () => {
     try {
-      const result = await createChannel.mutateAsync({ data: { name: "New chat" } });
+      const result = await createChannel.mutateAsync({ data: { name: "New chat", type: "general" } });
       const newId = (result as { id?: number })?.id;
       qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
       if (newId) {

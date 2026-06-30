@@ -45,7 +45,7 @@ export default function Tasks() {
     <div className="flex-1 flex flex-col h-full bg-background overflow-hidden relative">
       <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-accent/5 via-background to-background"></div>
       
-      <div className="p-8 border-b border-card-border relative z-10 flex items-center gap-4">
+      <div className="p-4 sm:p-8 border-b border-card-border relative z-10 flex items-center gap-4">
         <div className="w-12 h-12 bg-accent/10 rounded-lg flex items-center justify-center border border-accent/20">
           <LayoutGrid className="w-6 h-6 text-accent" />
         </div>
