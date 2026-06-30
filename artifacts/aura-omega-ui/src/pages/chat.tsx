@@ -72,6 +72,9 @@ export default function ChatPage() {
   }, [channels, urlChannelId]);
   const [exportOpen, setExportOpen] = useState(false);
   const [bridgeStatus, setBridgeStatus] = useState<{ enabled: boolean; tokenConfigured: boolean; channelConfigured: boolean; channelId: string | null } | null>(null);
+  // True while the scratchpad has seen activity in the last ~15s — signals a
+  // background swarm mission is still running even after the SSE call ends.
+  const [swarmActive, setSwarmActive] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -201,6 +204,9 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, ai.tokens, ai.streaming]);
+
+  // Don't carry a stale "swarm is working" indicator across a channel switch.
+  useEffect(() => { setSwarmActive(false); }, [activeId]);
 
   const [, navigate] = useLocation();
 
@@ -424,9 +430,24 @@ export default function ChatPage() {
                     </div>
                   ) : (
                     <div className="chat-bubble-agent px-4 py-3">
-                      <TypingDots />
+                      <ThinkingIndicator label="Thinking" />
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+            {/* The initial /api/ai/chat request can finish while the swarm keeps
+                working server-side (multi-phase missions post messages async).
+                Without this, the UI goes idle-looking even though agents are
+                still running — surface that via the scratchpad's own recency signal. */}
+            {!ai.streaming && swarmActive && (
+              <div className="flex gap-3">
+                <Avatar name="ABBY" color="#22d3ee" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-semibold text-cyan-500 mb-1">ABBY</div>
+                  <div className="chat-bubble-agent px-4 py-3">
+                    <ThinkingIndicator label="Swarm is still working" />
+                  </div>
                 </div>
               </div>
             )}
@@ -442,7 +463,7 @@ export default function ChatPage() {
         </div>
 
         {/* Agent working scratchpad */}
-        {activeId != null && <AgentScratchPanel channelId={activeId} streaming={ai.streaming} />}
+        {activeId != null && <AgentScratchPanel channelId={activeId} streaming={ai.streaming} onActivity={setSwarmActive} />}
 
         {/* Composer */}
         <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur-sm">
@@ -540,7 +561,7 @@ const SCRATCH_TYPE_STYLE: Record<ScratchType, { label: string; color: string }> 
   note:       { label: "note",       color: "text-muted-foreground border-border bg-muted/30" },
 };
 
-function AgentScratchPanel({ channelId, streaming }: { channelId: number; streaming: boolean }) {
+function AgentScratchPanel({ channelId, streaming, onActivity }: { channelId: number; streaming: boolean; onActivity?: (active: boolean) => void }) {
   const [entries, setEntries] = useState<ScratchEntry[]>([]);
   const [open, setOpen] = useState(false);
   const [hasHadContent, setHasHadContent] = useState(false);
@@ -559,11 +580,15 @@ function AgentScratchPanel({ channelId, streaming }: { channelId: number; stream
           setHasHadContent(true);
           setOpen(true);
         }
+        // A scratch entry younger than ~15s means a background mission is
+        // still actively producing work, even if the SSE call already ended.
+        const lastTs = list.length > 0 ? list[list.length - 1].ts : 0;
+        onActivity?.(Boolean(lastTs) && Date.now() - lastTs < 15000);
       } catch { /* silent */ }
     };
     poll();
     const interval = setInterval(poll, streaming ? 1500 : 5000);
-    return () => { alive = false; clearInterval(interval); };
+    return () => { alive = false; clearInterval(interval); onActivity?.(false); };
   }, [channelId, streaming]);
 
   if (!hasHadContent && entries.length === 0) return null;
@@ -664,6 +689,36 @@ function MessageRow({ message: m }: { message: { messageType: string; content: s
   }
   const color = m.agentColor || "#22d3ee";
   const isTool = m.messageType === "tool_output";
+  // The orchestrator writes a hard failure (e.g. a missing LLM API key) straight
+  // into the channel as a normal-looking message. Flag it visually instead of
+  // letting it blend in as faint, easy-to-miss gray text.
+  const isOrchestrationError = /^Orchestration error:/i.test(m.content.trim());
+  if (isOrchestrationError) {
+    // Server joins fallback parts with "\n\n" — see ensureFinalAnswer() in runtimeGuards.ts
+    const [errorLine, ...rest] = m.content.split("\n\n");
+    const goalLine = rest.join("\n\n").trim();
+    return (
+      <div className="flex gap-3 group">
+        <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center border border-destructive/40 bg-destructive/10">
+          <AlertTriangle className="w-4 h-4 text-destructive" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2 mb-1">
+            <span className="text-[12px] font-semibold text-destructive">Orchestration failed</span>
+            {m.timestamp && (
+              <span className="text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+          </div>
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm leading-relaxed text-destructive">
+            <div className="font-medium">{(errorLine ?? m.content).replace(/^Orchestration error:\s*/i, "")}</div>
+            {goalLine && <div className="mt-1.5 text-destructive/70 text-xs">{goalLine}</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex gap-3 group">
       <Avatar name={m.agentName || "Assistant"} color={color} />
@@ -746,12 +801,28 @@ function MessageActions({ content }: { content: string }) {
   );
 }
 
-function TypingDots() {
+// Kimi-style "thinking" indicator: icon + label + live elapsed timer + dots,
+// so the operator can always tell the swarm is actively working (not just
+// before the first token, but across the gap while a background mission runs).
+function ThinkingIndicator({ label = "Thinking" }: { label?: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
   return (
-    <div className="flex items-center gap-1 py-2" aria-label="Assistant is typing">
-      {[0, 1, 2].map((i) => (
-        <span key={i} className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
-      ))}
+    <div className="flex items-center gap-2 py-1" aria-live="polite" aria-label={label}>
+      <Brain className="w-4 h-4 text-cyan-500 animate-pulse shrink-0" />
+      <span className="text-sm text-muted-foreground">
+        {label}
+        {elapsed > 0 ? ` · ${elapsed}s` : ""}
+      </span>
+      <span className="flex items-center gap-1">
+        {[0, 1, 2].map((i) => (
+          <span key={i} className="w-1.5 h-1.5 rounded-full bg-cyan-500/70 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+        ))}
+      </span>
     </div>
   );
 }

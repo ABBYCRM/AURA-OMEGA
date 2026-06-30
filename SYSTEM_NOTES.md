@@ -16,6 +16,69 @@ what was changed, when, and why. Every future AI working on this codebase should
 
 ---
 
+## 2026-06-30 — QA Automation Audit, Chat "Thinking" Indicator Redesign, Orchestration-Error Surfacing
+
+**Author:** Claude Sonnet 4.6 (`claude/github-render-deployment-2pxepk`)
+**Type:** `[INFRA]` `[SECURITY-ADJACENT]`
+
+**Read this entire entry before touching `chat.tsx`, the QA scripts, or NVIDIA key config.**
+
+### Repo / branch state
+
+- Repo: `abbycrm/aura-omega` (GitHub), local checkout `/home/user/AURA-OMEGA`.
+- Designated branch for this work: `claude/github-render-deployment-2pxepk`.
+- Mid-session this branch was found **already merged into `main`** (`git merge-base --is-ancestor` confirmed). Per the standing branch protocol for that exact case, it was restarted from latest `main` (`git fetch origin main && git checkout -B claude/github-render-deployment-2pxepk origin/main`) and new work continued on top. If you're picking this up later, check `git log --oneline -5` first — it may have been merged again since.
+
+### 1. Playwright QA audit (route crawl + interaction tests)
+
+Two scripts added, both runnable against a local preview build (`vite preview` on port 4173):
+
+- `scripts/qa-crawl.mjs` — crawls all 17 routes × 3 viewports (51 loads) with full `/api/**` mocking, capturing console errors, network failures, a11y gaps (`buttonsNoName`, `imgsNoAlt`, `inputsNoLabel`, `linksNoHref`), and layout overflow. Output: `results.json` + per-page screenshots.
+- `scripts/qa-interactions.mjs` — targeted edge-case tests: login form (empty/disabled, 5000-char input, invalid creds, rapid-click dedup), chat composer (empty-Enter blocked, 10k-char message, rapid-Enter dedup), and forced API-500 resilience on `/agents`, `/tasks`, `/missions`, `/cron` (waits 8s for react-query retry/backoff to exhaust, then checks for graceful "Couldn't load.../Retry" UI).
+
+**Playwright gotcha worth remembering:** `page.route()` priority is LIFO — the most recently registered handler wins. Register broad `**/api/**` catch-alls FIRST, specific overrides LAST. Getting this backwards silently breaks auth mocking (both scripts hit this bug before being fixed).
+
+### 2. Confirmed bugs from the audit (not yet fixed in code, except where noted)
+
+| File:Line | Bug | Severity |
+|---|---|---|
+| `artifacts/aura-omega-ui/src/pages/hermes.tsx:138,191,196` | `s?.skills.total` — optional chaining only guards `s?.`, not the nested property. A malformed-but-200 response produces a **full white-screen crash** (confirmed via screenshot), and there is **no React ErrorBoundary anywhere in the app** to catch it. | Critical |
+| `artifacts/aura-omega-ui/src/pages/remote.tsx:125` | Same incomplete-optional-chaining pattern (`status.data?.adapters.length`) — same white-screen crash class. | Critical |
+| *(systemic)* | Zero `ErrorBoundary`/`componentDidCatch`/`getDerivedStateFromError` anywhere under `artifacts/aura-omega-ui/src` — any unhandled render error blanks the whole page instead of degrading one panel. | Critical |
+| `artifacts/aura-omega-ui/src/pages/integrations-console.tsx` | Per-API "Connect" button has no `onClick`; entire "Website logins" mini-form (inputs + "Save website login" button) is uncontrolled/dead. | High |
+| `artifacts/aura-omega-ui/src/pages/scheduled-console.tsx` | "Create job" button has **no `disabled` guard at all** (sibling `cron.tsx` validates `name`/`task` before enabling). Empty jobs can be POSTed. `/scheduled` and `/cron` look like two parallel/duplicate implementations of the same feature — worth reconciling. | Medium |
+| `artifacts/aura-omega-ui/src/pages/settings.tsx` (Primary Planner dropdown) | Defaults to `kimi-k2.6` and includes `<option value="openrouter-auto">OpenRouter auto-router</option>`, contradicting this file's own "No OpenRouter models" rule. | Medium |
+| `artifacts/aura-omega-ui/src/pages/tool-matrix.tsx:50` | Search `<textarea>` has no `aria-label`/`placeholder`/associated `<label>`. Genuine a11y gap. | Low |
+
+**False positives investigated and dismissed:** `settings.tsx`'s `inputsNoLabel=11` flag — all 11 fields are wrapped in implicit `<label>...</label>`, valid markup the crawler's detector doesn't recognize. Chat composer "0 POSTs on 3 rapid Enter presses while streaming" — correct single-in-flight guard behavior, not a bug.
+
+### 3. Chat "thinking" indicator redesign (`artifacts/aura-omega-ui/src/pages/chat.tsx`)
+
+User asked for a Kimi-style "AO is thinking" indicator after a mobile screenshot showed the composer going idle-looking with no sign of life right after ABBY's two initial acknowledgment messages land. Root-caused to two distinct issues, both addressed:
+
+1. **The original `TypingDots` (3 bouncing dots, unlabeled) only showed before the first streamed token.** Replaced with `ThinkingIndicator` — a `Brain` icon + `"Thinking · Ns"` label with a live elapsed-second counter + animated dots — used in place of `TypingDots` wherever `ai.streaming && !ai.tokens`.
+2. **The real gap:** `/api/ai/chat` is a single-shot SSE call; `ai.streaming` goes `false` the moment that call ends, but multi-phase swarm missions keep posting messages/scratch entries server-side *after* that, with `useListMessages` only polling every 4s. During that window the UI looked completely idle. Fixed by having `AgentScratchPanel` report activity recency (its newest entry's `ts` within ~15s) up to the parent via a new `onActivity` callback, stored as `swarmActive` state, which now renders a second, independent `ThinkingIndicator` (label: `"Swarm is still working"`) any time `!ai.streaming && swarmActive`. Resets to `false` on channel switch so it can't carry over stale.
+
+### 4. CRITICAL — found via the user's own screenshot, NOT something I can fix myself
+
+The user's screenshot of `task-1-lead-research` showed, after the two ABBY acknowledgment messages, this persisted message:
+
+```
+Orchestration error: Error: LLM not configured: NVIDIA_API_KEY must be set — keyCount=0
+```
+
+This is thrown from `artifacts/api-server/src/lib/integrations.ts` (`llmBaseUrl()` / `llmHeaders()`) and caught in `artifacts/api-server/src/orchestrator.ts:1190-1195`, which writes it into the channel as a normal-looking agent message — previously rendered with the same plain gray `chat-bubble-agent` styling as everything else, making a **complete, channel-wide LLM outage look like a low-priority status update**. That presentation bug is fixed (see below). The underlying cause is not: **production has zero NVIDIA NIM keys configured** (`keyCount=0`), and Kimi.com fallback (`kimiApiConfigured()`) isn't configured either, so every chat request in production currently fails outright after the orchestrator's canned acknowledgment text. Per this file's own rules ("No secrets in repo — all keys live in Render env vars only" / self-healing only covers things that don't require operator-supplied secrets), **this requires the operator to set `NVIDIA_API_KEY` (and/or a Kimi fallback key) in the Render dashboard** — it cannot be fixed from inside the repo. If you're a future AI session picking this up: check `/render-set-env` or the Render dashboard's env vars for the live `aura-omega` service before doing anything else if chat appears to be silently failing in production.
+
+**Fixed as part of this entry:** `MessageRow` in `chat.tsx` now detects `/^Orchestration error:/i` content and renders it as a distinct destructive-styled alert (red `AlertTriangle` icon, "Orchestration failed" label, red bordered box, the operator-goal line shown as a muted sub-line) instead of a plain agent bubble — so a hard failure is now visually unmissable even while the key is still missing.
+
+### 5. Open / not yet done
+
+- The 7 QA-audit bugs in the table above are **reported, not fixed** (user had not yet confirmed whether to fix them when this entry was written).
+- `NVIDIA_API_KEY` (and ideally a Kimi fallback key) needs to be set in Render — operator action, see above.
+- `scripts/qa-crawl.mjs` and `scripts/qa-interactions.mjs` are checked into `scripts/` for reuse; run them against a `vite preview` server on `localhost:4173` (see each file's `BASE` constant).
+
+---
+
 ## 2026-06-29 — New Tools: Jina, Perplexity, Resend, ElevenLabs, Fal.ai, HeyGen, Apify, Twilio
 
 **Author:** Claude Sonnet 4.6 (claude/github-render-deployment-2pxepk)
