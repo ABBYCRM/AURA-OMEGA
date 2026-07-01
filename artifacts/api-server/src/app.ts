@@ -13,7 +13,7 @@ import { setBrainToolRunner, setBrainLLM } from "./lib/mission/engines/brain-eng
 import { setLearningLoopDeps } from "./lib/learning-loop";
 import { runTool } from "./tools";
 import { completeChat } from "./lib/integrations";
-import { requireOperator } from "./lib/auth";
+// Auth removed per operator directive — all routes are public.
 
 const app: Express = express();
 
@@ -105,9 +105,7 @@ app.get("/version", (_req, res) => {
 });
 
 // Debug: dump env vars (no secrets — lengths and prefixes only)
-// Mounted directly on app to bypass route-level middleware, but still
-// requires a signed-in session — this is sensitive enough to gate.
-app.get("/_debug/env", requireOperator, async (_req, res) => {
+app.get("/_debug/env", async (_req, res) => {
   const keys = ['DATABASE_URL', 'NVIDIA_API_KEY', 'NVIDIA_API_KEYS', 'DEPLOY_VERSION', 'SCRAPINGBEE_API_KEY', 'KIMI_API_KEY', 'ABBY_MODEL', 'PORT', 'NODE_ENV'];
   const result: Record<string, { len: number; prefix: string }> = {};
   for (const k of keys) {

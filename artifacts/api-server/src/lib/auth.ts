@@ -228,17 +228,12 @@ function extractToken(req: Request): string | null {
 }
 
 /**
- * Express middleware that rejects any request lacking a valid user session.
- * Responses are intentionally generic so anonymous callers learn nothing about
- * the protected resource (e.g. stored secret names). On success, attaches the
- * signed-in username to `req.authUser`.
+ * Express middleware — AUTH DISABLED per operator directive.
+ * Was: reject any request lacking a valid user session.
+ * Now: passes all requests through with "operator" as the default user.
+ * This keeps any code that imports requireOperator working without changes.
  */
-export function requireOperator(req: Request, res: Response, next: NextFunction): void {
-  const user = verifySessionToken(extractToken(req));
-  if (user) {
-    (req as Request & { authUser?: string }).authUser = user;
-    next();
-    return;
-  }
-  res.status(401).json({ error: "Unauthorized — sign-in required" });
+export function requireOperator(req: Request, _res: Response, next: NextFunction): void {
+  (req as Request & { authUser?: string }).authUser = "operator";
+  next();
 }
