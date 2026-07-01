@@ -16,6 +16,35 @@ what was changed, when, and why. Every future AI working on this codebase should
 
 ---
 
+## 2026-07-01 — Branch Archaeology: 52 stale branches audited, recorded, queued for deletion
+
+**Author:** Claude Sonnet 5 (claude/github-render-deployment-2pxepk)
+**Type:** `[INFRA]`
+
+The repo had accumulated 52 stale remote branches (plus `master`, itself stale/abandoned). The
+operator asked to consolidate their "vital information" into `main`. Investigation found:
+
+- 9 branches: zero unique commits — pure duplicates of `main`, safe to delete outright.
+- 6 branches (incl. `master`): unique commits exist but resulting file content is identical to
+  `main` — the same fix landed a different way. Safe to delete.
+- 37 branches: genuinely diverged, all from the same commit (`2026-06-25 23:37:23Z`, the
+  `personality-tab-settings → main` merge). A real merge attempt was made for every one of
+  them into current `main` — **all 37 conflicted**, 12–44 files each. `main` has moved
+  hundreds of commits past that divergence point on its own line since; these are abandoned
+  parallel-universe snapshots, not small deltas. Force-resolving that many conflicts blind
+  was rejected as unsafe (high risk of silently reintroducing stale/reverted code).
+
+Full branch-by-branch intent record (so nothing is lost even after the refs are gone): see
+**`ARCHIVED_BRANCHES.md`** in repo root. If a future AI needs something specific out of Group C,
+cherry-pick the specific commit SHA — don't attempt a full branch merge.
+
+**Note on execution:** this sandbox's GitHub push credentials are scoped for pushing commits only,
+not deleting refs (`git push --delete` → HTTP 403, and no delete-branch tool is exposed via the
+GitHub MCP server here). The actual `git push origin --delete <branches...>` command was handed to
+the operator to run with their own full-access credentials.
+
+---
+
 ## 2026-06-30 — QA Automation Audit, Chat "Thinking" Indicator Redesign, Orchestration-Error Surfacing
 
 **Author:** Claude Sonnet 4.6 (`claude/github-render-deployment-2pxepk`)
