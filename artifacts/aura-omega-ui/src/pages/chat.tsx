@@ -1,807 +1,226 @@
-import { useEffect, useRef, useState, useMemo } from "react";
-import { useLocation, useSearch } from "wouter";
-import {
-  useListChannels,
-  useCreateChannel,
-  useListMessages,
-  useSendMessage,
-  getListChannelsQueryKey,
-  getListMessagesQueryKey,
-  resolveApiUrl,
-} from "@workspace/api-client-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useAiStream } from "@/hooks/useAiStream";
-import { GOAL_DRAFT_KEY } from "@/lib/handoff";
-import { MessageContent } from "@/components/chat/MessageContent";
-import { WhatsNewButton } from "@/components/WhatsNew";
+import { useState, useRef, useEffect } from "react";
+import { useAuth } from "@/hooks/use-auth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { queryClient } from "@/lib/queryClient";
+import { Send, Loader2, Menu, MessageSquarePlus, ChevronDown, Sparkles, Scan, PenTool, Hash, Share2, User, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
-import {
-  Plus, Send, Paperclip, X, Download, Check,
-  Bot, AlertTriangle, Loader2, Sparkles, Copy, Volume2, Square, Mic, Rocket,
-  ChevronDown, ChevronUp, Brain,
-} from "lucide-react";
 
-// Uploaded to /api/uploads on pick; images are rendered inline and sent to ABBY
-// as vision input, text files have their text read by the agent.
-interface Attachment { id: number; name: string; size: number; kind: string; mime: string; url: string; }
-
-// Minimal typing for the browser Web Speech API (not in lib.dom for all targets).
-interface SpeechRecognitionEventLike {
-  resultIndex: number;
-  results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }>;
-}
-interface SpeechRecognitionLike {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  onresult: (e: SpeechRecognitionEventLike) => void;
-  onerror: () => void;
-  onend: () => void;
-  start: () => void;
-  stop: () => void;
+interface Message {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
 }
 
-// Read a File as a base64 data URL for upload.
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
-  });
+interface ChatThread {
+  id: number;
+  title: string;
+  createdAt: string;
 }
 
 export default function ChatPage() {
-  const qc = useQueryClient();
-  const { data: channelsData, isLoading: channelsLoading } = useListChannels({
-    query: { refetchInterval: 8000, queryKey: getListChannelsQueryKey() },
-  });
-  const channels = Array.isArray(channelsData) ? channelsData : [];
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [input, setInput] = useState("");
+  const [activeThread, setActiveThread] = useState<number | null>(null);
+  const [isThinking, setIsThinking] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Derive active channel from ?c= URL param; fall back to first channel
-  const searchStr = useSearch();
-  const urlChannelId = useMemo(() => {
-    const n = parseInt(new URLSearchParams(searchStr.replace(/^\?/, "")).get("c") ?? "", 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }, [searchStr]);
-  const activeId = useMemo(() => {
-    if (!channels.length) return null;
-    if (urlChannelId != null && channels.some((c) => c.id === urlChannelId)) return urlChannelId;
-    return channels[0]?.id ?? null;
-  }, [channels, urlChannelId]);
-  const [exportOpen, setExportOpen] = useState(false);
-  const [bridgeStatus, setBridgeStatus] = useState<{ enabled: boolean; tokenConfigured: boolean; channelConfigured: boolean; channelId: string | null } | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const res = await fetch(resolveApiUrl("/api/discord/status"));
-        if (!res.ok) return;
-        const data = await res.json();
-        if (alive) setBridgeStatus(data);
-      } catch { /* status is cosmetic; chat endpoint still reports hard errors */ }
-    };
-    load();
-    const id = window.setInterval(load, 15000);
-    return () => { alive = false; window.clearInterval(id); };
-  }, []);
-
-
-  // Goal handed off from the Swarm page: prefill the composer so the user lands
-  // in Chat (the command surface) ready to dispatch. We never auto-send.
-  const [pendingDraft, setPendingDraft] = useState(false);
-
-  const activeChannel = channels.find((c) => c.id === activeId) ?? null;
-
-  const { data: messagesData, isLoading: msgsLoading, isError: msgsError, refetch: refetchMsgs } =
-    useListMessages(activeId ?? 0, {
-      query: { enabled: activeId != null, refetchInterval: 4000, queryKey: getListMessagesQueryKey(activeId ?? 0) },
-    });
-
-  const messages = Array.isArray(messagesData) ? messagesData : [];
-
-  const ai = useAiStream(() => {
-    if (activeId) setTimeout(() => qc.invalidateQueries({ queryKey: getListMessagesQueryKey(activeId) }), 400);
+  const { data: threads } = useQuery<ChatThread[]>({
+    queryKey: ["/api/chat/threads"],
+    enabled: !!user,
   });
 
-  const sendMessage = useSendMessage();
-  const createChannel = useCreateChannel({
-    mutation: {
-      onSuccess: (ch) => {
-        qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
-        navigate(`/chat?c=${(ch as { id: number }).id}`);
-      },
-      onError: () => toast.error("Couldn't start a new chat."),
+  const { data: messages } = useQuery<Message[]>({
+    queryKey: [`/api/chat/threads/${activeThread}/messages`],
+    enabled: !!activeThread,
+  });
+
+  const createThreadMutation = useMutation({
+    mutationFn: async (title: string) => {
+      const res = await apiRequest("POST", "/api/chat/threads", { title });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setActiveThread(data.id);
+      queryClient.invalidateQueries({ queryKey: ["/api/chat/threads"] });
+      toast({ title: "New thread created", description: data.title });
     },
   });
 
-  // ── Composer ──────────────────────────────────────────────────────────────
-  const [text, setText] = useState("");
-  const [attachment, setAttachment] = useState<Attachment | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [listening, setListening] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<unknown>(null);
-
-  // Voice input (speech-to-text) via the browser Web Speech API. Dictated text is
-  // appended to the composer; no audio leaves the browser for this path.
-  const toggleVoice = () => {
-    const w = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike };
-    const Rec = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!Rec) {
-      toast.error("Voice input isn't supported in this browser. Try Chrome.");
-      return;
-    }
-    if (listening) {
-      (recognitionRef.current as SpeechRecognitionLike | null)?.stop();
-      return;
-    }
-    const rec = new Rec();
-    rec.lang = "en-US";
-    rec.interimResults = true;
-    rec.continuous = false;
-    let finalText = "";
-    rec.onresult = (e: SpeechRecognitionEventLike) => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
-        else interim += r[0].transcript;
+  const sendMessageMutation = useMutation({
+    mutationFn: async (content: string) => {
+      if (!activeThread) {
+        const thread = await createThreadMutation.mutateAsync(content.slice(0, 50));
+        setActiveThread(thread.id);
       }
-      setText((prev) => {
-        const base = prev.replace(/\s*\[…\]$/, "");
-        return (finalText ? `${base}${base && !base.endsWith(" ") ? " " : ""}${finalText}` : `${base} […]`).trimStart();
+      const res = await apiRequest("POST", `/api/chat/threads/${activeThread}/messages`, {
+        content,
+        role: "user",
       });
-    };
-    rec.onerror = () => { setListening(false); };
-    rec.onend = () => {
-      setListening(false);
-      setText((prev) => prev.replace(/\s*\[…\]$/, ""));
-      requestAnimationFrame(() => taRef.current?.focus());
-    };
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
-  };
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/chat/threads/${activeThread}/messages`] });
+      setIsThinking(true);
+      setTimeout(() => setIsThinking(false), 2000);
+    },
+  });
 
-  const autoGrow = () => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
-  };
-  useEffect(autoGrow, [text]);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim()) return;
 
-  // Pick up a goal handed off from the Swarm page (set the composer text once,
-  // then clear the handoff). If there's no conversation yet, start one so the
-  // prefilled goal is immediately sendable.
-  useEffect(() => {
-    let draft: string | null = null;
-    try { draft = sessionStorage.getItem(GOAL_DRAFT_KEY); } catch { /* ignore */ }
-    if (draft) {
-      setText(draft);
-      setPendingDraft(true);
-      try { sessionStorage.removeItem(GOAL_DRAFT_KEY); } catch { /* ignore */ }
-      requestAnimationFrame(() => taRef.current?.focus());
-    }
-  }, []);
+    const content = input;
+    setInput("");
+    await sendMessageMutation.mutateAsync(content);
+  };
 
   useEffect(() => {
-    if (pendingDraft && activeId == null && !channelsLoading && channels.length === 0) {
-      newChat();
-      setPendingDraft(false);
-    }
-  }, [pendingDraft, activeId, channelsLoading, channels.length]);
-
-  // Auto-scroll to newest content (and while streaming).
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, ai.tokens, ai.streaming]);
-
-  const [, navigate] = useLocation();
-
-  // Launch the current composer text as a Mission Kernel goal. Posts to
-  // /api/missions, surfaces a deep-link to /missions, and clears the composer
-  // so the operator can keep iterating. This is the surface that was missing
-  // before — pasting a goal into the chat used to vanish into a chat reply
-  // instead of becoming a tracked, durable mission.
-  const launchAsMission = async () => {
-    const goal = text.trim();
-    if (!goal) return;
-    try {
-      const r = await fetch(resolveApiUrl("/api/missions"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal, createdBy: "chat" }),
-      });
-      if (!r.ok) {
-        const err = await r.text();
-        toast.error(`Mission creation failed: ${err.slice(0, 120)}`);
-        return;
-      }
-      const d = await r.json();
-      const missionId = d?.mission?.id;
-      const gate = d?.brainGate ?? "?";
-      const steps = Array.isArray(d?.plan) ? d.plan.length : 0;
-      toast.success(
-        `Mission #${missionId} created (${steps} steps, gate=${gate})`,
-        {
-          description: "Tap to open the mission dashboard",
-          action: {
-            label: "Open",
-            onClick: () => navigate(`/missions`),
-          },
-        },
-      );
-      setText("");
-    } catch (e) {
-      toast.error(`Mission creation failed: ${String(e).slice(0, 120)}`);
-    }
-  };
-
-  const send = () => {
-    const body = text.trim();
-    if ((!body && !attachment) || activeId == null || ai.streaming) return;
-    const att = attachment;
-    // What gets persisted/shown in the feed: images render inline via markdown,
-    // other files show as a labelled link.
-    let composed = body;
-    if (att) {
-      const tag =
-        att.kind === "image"
-          ? `![${att.name}](${resolveApiUrl(att.url)})`
-          : `📎 [${att.name}](${resolveApiUrl(att.url)})`;
-      composed = `${body}${body ? "\n\n" : ""}${tag}`;
-    }
-    setText("");
-    setAttachment(null);
-    requestAnimationFrame(autoGrow);
-    sendMessage.mutate(
-      { data: { content: composed, messageType: "user" }, channelId: activeId },
-      {
-        onSuccess: () => {
-          qc.invalidateQueries({ queryKey: getListMessagesQueryKey(activeId) });
-          // The model gets the original text plus the attachment id (vision/text).
-          ai.send({
-            message: body || "(see attached file)",
-            agentId: null,
-            channelId: activeId,
-            attachmentIds: att ? [att.id] : undefined,
-          });
-        },
-        onError: () => toast.error("Couldn't send your message. Try again."),
-      },
-    );
-  };
-
-  const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  };
-
-  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) return;
-    const maxUploadMb = Number(import.meta.env.VITE_AURA_MAX_UPLOAD_MB ?? 100);
-    if (f.size > maxUploadMb * 1024 * 1024) {
-      toast.error(`File too large (max ${maxUploadMb} MB).`);
-      return;
-    }
-    setUploading(true);
-    try {
-      const dataUrl = await fileToDataUrl(f);
-      const res = await fetch(resolveApiUrl("/api/uploads"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: f.name, mime: f.type || "application/octet-stream", dataBase64: dataUrl }),
-      });
-      if (!res.ok) {
-        const b = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(b.error || `HTTP ${res.status}`);
-      }
-      const a = (await res.json()) as Attachment;
-      setAttachment(a);
-    } catch (err) {
-      toast.error(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  // ── Conversation actions ────────────────────────────────────────────────
-  const newChat = () =>
-    createChannel.mutate({ data: { name: `New chat`, type: "general" } });
-
-
-  const exportConvo = (fmt: "txt" | "json") => {
-    setExportOpen(false);
-    if (!messages.length) { toast("Nothing to export yet."); return; }
-    const rows = messages.map((m) => ({
-      role: m.messageType === "user" ? "user" : (m.agentName || "assistant"),
-      content: m.content,
-      at: m.timestamp,
-    }));
-    const blob =
-      fmt === "json"
-        ? new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" })
-        : new Blob([rows.map((r) => `### ${r.role} · ${new Date(r.at).toLocaleString()}\n${r.content}\n`).join("\n")], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(activeChannel?.name || "conversation").replace(/\s+/g, "-").toLowerCase()}.${fmt}`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const copyThread = () => {
-    if (!messages.length) { toast("Nothing to copy yet."); return; }
-    const rows = messages
-      .filter((m) => (m.content ?? "").trim())
-      .map((m) => {
-        const role = m.messageType === "user" ? "USER" : (m.agentName || "ASSISTANT").toUpperCase();
-        return `${role} [${new Date(m.timestamp).toLocaleString()}]\n${m.content}`;
-      });
-    navigator.clipboard?.writeText(rows.join("\n\n---\n\n")).then(() => {
-      toast.success("Thread copied to clipboard.");
-    }).catch(() => toast.error("Clipboard access denied."));
-  };
-
-  const visibleMessages = messages.filter((m) => (m.content ?? "").trim().length > 0);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isThinking]);
 
   return (
-    <div className="flex w-full h-full bg-background text-foreground overflow-hidden">
-      {/* ── Main column ── */}
+    <div className="flex h-full bg-[#0d0d0d]">
+      {/* Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top bar */}
-        <header className="h-14 shrink-0 border-b border-card-border flex items-center gap-2 sm:gap-3 px-3 sm:px-4">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-primary shrink-0" />
-            <div className="min-w-0">
-              <h1 className="text-sm font-semibold truncate">{activeChannel?.name ?? "AURA-OMEGA"}</h1>
-              <p className="text-[11px] text-muted-foreground truncate hidden sm:block">UI → AURA-OMEGA → governed tools → verified result</p>
+        {/* Header */}
+        <header className="h-14 border-b border-white/5 flex items-center justify-between px-4 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <button className="p-2 hover:bg-white/5 rounded-lg text-gray-400 hover:text-white transition-colors">
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2">
+              <h1 className="text-white font-medium text-sm">
+                {activeThread 
+                  ? threads?.find(t => t.id === activeThread)?.title || "Chat" 
+                  : "New Chat"}
+              </h1>
+              <ChevronDown className="w-4 h-4 text-gray-500" />
             </div>
           </div>
-          <BridgePill status={bridgeStatus} />
-          <WhatsNewButton />
-          <div className="relative">
-            <button
-              onClick={() => setExportOpen((v) => !v)}
-              aria-label="Export conversation"
-              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors"
-            >
-              <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export</span>
-            </button>
-            {exportOpen && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
-                <div className="absolute right-0 mt-1 w-44 rounded-lg border border-card-border bg-popover shadow-xl z-20 overflow-hidden">
-                  <button onClick={() => { copyThread(); setExportOpen(false); }} className="w-full text-left px-3 py-2 text-sm hover:bg-card-border/50">Copy thread</button>
-                  <button onClick={() => exportConvo("txt")} className="w-full text-left px-3 py-2 text-sm hover:bg-card-border/50">Download .txt</button>
-                  <button onClick={() => exportConvo("json")} className="w-full text-left px-3 py-2 text-sm hover:bg-card-border/50">Download .json</button>
-                </div>
-              </>
-            )}
-          </div>
+          <button 
+            onClick={() => createThreadMutation.mutate("New Chat")}
+            className="p-2 hover:bg-white/5 rounded-lg text-gray-400 hover:text-white transition-colors"
+          >
+            <MessageSquarePlus className="w-5 h-5" />
+          </button>
         </header>
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6 space-y-4 sm:space-y-5">
-            {activeId == null && !channelsLoading ? (
-              <EmptyState onNew={newChat} />
-            ) : msgsLoading ? (
-              <div className="flex items-center justify-center py-20 text-muted-foreground gap-2">
-                <Loader2 className="w-5 h-5 animate-spin" /> Loading conversation…
+          {!messages?.length && !isThinking ? (
+            <div className="flex flex-col items-center justify-center h-full text-center px-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/20 to-red-500/20 flex items-center justify-center mb-6">
+                <Sparkles className="w-8 h-8 text-orange-500" />
               </div>
-            ) : msgsError ? (
-              <div className="flex flex-col items-center py-20 gap-3 text-center">
-                <AlertTriangle className="w-7 h-7 text-destructive" />
-                <span className="text-sm text-muted-foreground">Couldn't load this conversation.</span>
-                <button onClick={() => refetchMsgs()} className="px-4 py-1.5 rounded-lg border border-card-border text-sm hover:border-primary/40">Retry</button>
-              </div>
-            ) : visibleMessages.length === 0 && !ai.streaming ? (
-              <EmptyConversation onPrompt={(p) => { setText(p); taRef.current?.focus(); }} />
-            ) : (
-              visibleMessages.map((m) => <MessageRow key={m.id} message={m} />)
-            )}
-
-            {/* Live streaming reply */}
-            {ai.streaming && (
-              <div className="flex gap-3">
-                <Avatar name={ai.agentName ?? "ABBY"} color="#22d3ee" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-semibold text-cyan-500 mb-1">{ai.agentName ?? "ABBY"}</div>
-                  {ai.tokens ? (
-                    <div className="chat-bubble-agent px-4 py-3 text-sm leading-relaxed">
-                      <MessageContent content={ai.tokens} />
+              <h2 className="text-2xl font-semibold text-white mb-2">What can I help you with?</h2>
+              <p className="text-gray-500 text-sm max-w-md">
+                Start a conversation or create a new task. I can help with research, coding, analysis, and more.
+              </p>
+            </div>
+          ) : (
+            <div className="max-w-3xl mx-auto py-6 space-y-6">
+              {messages?.map((message) => (
+                <div
+                  key={message.id}
+                  className={cn(
+                    "flex gap-4",
+                    message.role === "user" ? "justify-end" : "justify-start"
+                  )}
+                >
+                  {message.role === "assistant" && (
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center flex-shrink-0 mt-1">
+                      <Sparkles className="w-4 h-4 text-white" />
                     </div>
-                  ) : (
-                    <div className="chat-bubble-agent px-4 py-3">
-                      <TypingDots />
+                  )}
+                  <div
+                    className={cn(
+                      "max-w-[80%] rounded-2xl px-4 py-3",
+                      message.role === "user"
+                        ? "bg-gray-800 text-white"
+                        : "text-gray-200"
+                    )}
+                  >
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                  </div>
+                  {message.role === "user" && (
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center flex-shrink-0 mt-1 border border-white/10">
+                      <User className="w-4 h-4 text-gray-400" />
                     </div>
                   )}
                 </div>
-              </div>
-            )}
-            {ai.error && (
-              <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">
-                {ai.error.includes("402") || /credit/i.test(ai.error)
-                  ? "The model provider is out of credits. Add credits or configure a fallback model."
-                  : `Something went wrong: ${ai.error.slice(0, 160)}`}
-              </div>
-            )}
-            <div ref={bottomRef} />
-          </div>
+              ))}
+
+              {/* Thinking Indicator */}
+              {isThinking && (
+                <div className="flex gap-4">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-4 h-4 text-white" />
+                  </div>
+                  <div className="flex items-center gap-2 text-gray-400">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-sm">Thinking</span>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
         </div>
 
-        {/* Agent working scratchpad */}
-        {activeId != null && <AgentScratchPanel channelId={activeId} streaming={ai.streaming} />}
-
-        {/* Composer */}
-        <div className="shrink-0 border-t border-border bg-background/95 backdrop-blur-sm">
-          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-3 sm:py-4">
-            {uploading && (
-              <div className="mb-2 inline-flex items-center gap-2 rounded-lg border border-card-border bg-card px-2.5 py-1.5 text-sm text-muted-foreground">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Uploading…
+        {/* Input Bar */}
+        <div className="p-4 border-t border-white/5">
+          <div className="max-w-3xl mx-auto">
+            <form onSubmit={handleSubmit} className="relative">
+              <div className="bg-[#1a1a1a] border border-white/10 rounded-2xl flex items-center gap-2 px-4 py-3 focus-within:border-orange-500/50 transition-colors">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Ask anything..."
+                  className="flex-1 bg-transparent text-white placeholder-gray-500 text-sm focus:outline-none"
+                />
+                <div className="flex items-center gap-1">
+                  <button type="button" className="p-2 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors">
+                    <Scan className="w-4 h-4" />
+                  </button>
+                  <button type="button" className="p-2 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors">
+                    <PenTool className="w-4 h-4" />
+                  </button>
+                  <button type="button" className="p-2 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors">
+                    <Hash className="w-4 h-4" />
+                  </button>
+                  <button type="button" className="p-2 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors">
+                    <Share2 className="w-4 h-4" />
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={!input.trim() || sendMessageMutation.isPending}
+                    className="p-2 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg text-white transition-colors"
+                  >
+                    {sendMessageMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
-            )}
-            {attachment && (
-              <div className="mb-2 inline-flex items-center gap-2 rounded-lg border border-card-border bg-card px-2.5 py-1.5 text-sm">
-                {attachment.kind === "image" ? (
-                  <img src={resolveApiUrl(attachment.url)} alt={attachment.name} className="w-8 h-8 rounded object-cover border border-card-border" />
-                ) : (
-                  <Paperclip className="w-3.5 h-3.5 text-muted-foreground" />
-                )}
-                <span className="truncate max-w-[200px]">{attachment.name}</span>
-                <button onClick={() => setAttachment(null)} aria-label="Remove attachment" className="text-muted-foreground hover:text-destructive">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-            <div className="flex items-end gap-2 rounded-2xl border border-border bg-card shadow-sm px-3 py-2 focus-within:border-primary/60 focus-within:shadow-[0_0_0_3px_rgba(139,92,246,0.10)] transition-all">
-              <input ref={fileRef} type="file" className="hidden" onChange={onPickFile} aria-hidden="true" />
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={activeId == null || uploading}
-                aria-label="Attach a file"
-                className="p-2 text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
-              >
-                {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
-              </button>
-              <button
-                onClick={toggleVoice}
-                disabled={activeId == null}
-                aria-label={listening ? "Stop voice input" : "Speak your message"}
-                title={listening ? "Listening… click to stop" : "Speak your message"}
-                className={cn(
-                  "p-2 transition-colors disabled:opacity-40",
-                  listening ? "text-[#ff2d78]" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Mic className={cn("w-5 h-5", listening && "animate-pulse")} />
-              </button>
-              <textarea
-                ref={taRef}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={onKey}
-                rows={1}
-                disabled={activeId == null}
-                aria-label="Message"
-                placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : "Message AURA-OMEGA…"}
-                className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-[200px]"
-              />
-              <button
-                onClick={launchAsMission}
-                disabled={!text.trim() || activeId == null || ai.streaming || uploading}
-                aria-label="Launch as mission"
-                title="Send this goal to the Mission Kernel (event-driven execution loop). Tracks progress, retries, and final state on /missions."
-                className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-              >
-                <Rocket className="w-5 h-5" />
-              </button>
-              <button
-                onClick={send}
-                disabled={(!text.trim() && !attachment) || activeId == null || ai.streaming || uploading}
-                aria-label="Send message"
-                className="p-2.5 rounded-xl bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0 transition-all shrink-0 shadow-[0_10px_28px_rgba(139,92,246,0.35),inset_0_1px_0_rgba(255,255,255,0.22)]"
-              >
-                {ai.streaming ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-              </button>
-            </div>
-            <p className="text-[10px] text-muted-foreground/40 text-center mt-2 select-none">
-              UI → BOS Governor → tool router → verified result
+            </form>
+            <p className="text-xs text-gray-600 mt-2 text-center">
+              AI can make mistakes. Verify important information.
             </p>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Subcomponents ───────────────────────────────────────────────────────────
-
-type ScratchType = "thought" | "hypothesis" | "result" | "todo" | "note";
-interface ScratchEntry { agentName: string; type: ScratchType; content: string; ts: number; }
-
-const SCRATCH_TYPE_STYLE: Record<ScratchType, { label: string; color: string }> = {
-  thought:    { label: "thought",    color: "text-cyan-400 border-cyan-400/30 bg-cyan-400/10" },
-  hypothesis: { label: "hypothesis", color: "text-violet-400 border-violet-400/30 bg-violet-400/10" },
-  result:     { label: "result",     color: "text-emerald-400 border-emerald-400/30 bg-emerald-400/10" },
-  todo:       { label: "todo",       color: "text-amber-400 border-amber-400/30 bg-amber-400/10" },
-  note:       { label: "note",       color: "text-muted-foreground border-border bg-muted/30" },
-};
-
-function AgentScratchPanel({ channelId, streaming }: { channelId: number; streaming: boolean }) {
-  const [entries, setEntries] = useState<ScratchEntry[]>([]);
-  const [open, setOpen] = useState(false);
-  const [hasHadContent, setHasHadContent] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      try {
-        const r = await fetch(resolveApiUrl(`/api/agent-scratch?channelId=${channelId}`));
-        if (!r.ok) return;
-        const data = await r.json();
-        const list: ScratchEntry[] = Array.isArray(data.entries) ? data.entries : [];
-        if (!alive) return;
-        setEntries(list);
-        if (list.length > 0) {
-          setHasHadContent(true);
-          setOpen(true);
-        }
-      } catch { /* silent */ }
-    };
-    poll();
-    const interval = setInterval(poll, streaming ? 1500 : 5000);
-    return () => { alive = false; clearInterval(interval); };
-  }, [channelId, streaming]);
-
-  if (!hasHadContent && entries.length === 0) return null;
-
-  return (
-    <div className="shrink-0 border-t border-card-border bg-card/40">
-      <div className="max-w-3xl mx-auto px-3 sm:px-4">
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="w-full flex items-center gap-2 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <Brain className="w-3.5 h-3.5 text-primary/70" />
-          <span className="font-semibold text-primary/80">Agent working scratchpad</span>
-          <span className="text-muted-foreground/50 ml-0.5">({entries.length} {entries.length === 1 ? "entry" : "entries"})</span>
-          {streaming && <span className="ml-1 w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
-          <span className="ml-auto">{open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}</span>
-        </button>
-        {open && (
-          <div className="pb-3 space-y-1.5 max-h-60 overflow-y-auto">
-            {entries.length === 0 ? (
-              <div className="text-xs text-muted-foreground/40 py-2">No entries yet for this task.</div>
-            ) : (
-              entries.map((e, i) => {
-                const style = SCRATCH_TYPE_STYLE[e.type] ?? SCRATCH_TYPE_STYLE.note;
-                return (
-                  <div key={i} className="flex items-start gap-2 text-xs">
-                    <span className="shrink-0 mt-0.5 text-muted-foreground/50 font-mono w-16 text-right">
-                      {e.agentName.replace("AURA-", "A")}
-                    </span>
-                    <span className={cn(
-                      "shrink-0 mt-0.5 rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                      style.color,
-                    )}>
-                      {style.label}
-                    </span>
-                    <span className="text-foreground/80 leading-relaxed flex-1 min-w-0 break-words">
-                      {e.content}
-                    </span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function BridgePill({ status }: { status: { enabled: boolean; tokenConfigured: boolean; channelConfigured: boolean; channelId: string | null } | null }) {
-  const ready = Boolean(status?.enabled && status?.tokenConfigured && status?.channelConfigured);
-  return (
-    <div
-      title={ready ? `Discord bridge connected to channel ${status?.channelId}` : "Discord bridge needs DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID"}
-      className={cn(
-        "hidden lg:flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs border shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
-        ready
-          ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
-          : "border-amber-400/30 bg-amber-400/10 text-amber-200",
-      )}
-    >
-      <span className={cn("w-2 h-2 rounded-full", ready ? "bg-emerald-400" : "bg-amber-400")} />
-      Discord bridge {ready ? "ready" : "needs env"}
-    </div>
-  );
-}
-
-function Avatar({ name, color }: { name: string; color: string }) {
-  const initials = name.split(/[\s.]+/).slice(0, 2).map((s) => s[0]).join("").toUpperCase();
-  return (
-    <div
-      className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-bold shadow-sm"
-      style={{ backgroundColor: `${color}20`, color, border: `1.5px solid ${color}50` }}
-    >
-      {initials || "AI"}
-    </div>
-  );
-}
-
-function MessageRow({ message: m }: { message: { messageType: string; content: string; agentName?: string | null; agentColor?: string | null; timestamp?: string } }) {
-  if (m.messageType === "user") {
-    return (
-      <div className="flex justify-end gap-2 group">
-        <div className="max-w-[88%] sm:max-w-[78%]">
-          <div className="chat-bubble-user px-4 py-3 text-sm leading-relaxed shadow-sm">
-            <MessageContent content={m.content} />
-          </div>
-        </div>
-      </div>
-    );
-  }
-  if (m.messageType === "system") {
-    return (
-      <div className="flex justify-center">
-        <div className="text-xs text-muted-foreground/70 bg-muted/40 rounded-full px-3 py-1">{m.content}</div>
-      </div>
-    );
-  }
-  const color = m.agentColor || "#22d3ee";
-  const isTool = m.messageType === "tool_output";
-  return (
-    <div className="flex gap-3 group">
-      <Avatar name={m.agentName || "Assistant"} color={color} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-[12px] font-semibold" style={{ color }}>{m.agentName || "Assistant"}</span>
-          {m.timestamp && (
-            <span className="text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
-              {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-        </div>
-        {isTool ? (
-          <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-3 font-mono text-[12px] text-muted-foreground whitespace-pre-wrap break-words overflow-x-auto">
-            {m.content}
-          </div>
-        ) : (
-          <div className="chat-bubble-agent px-4 py-3 text-sm leading-relaxed">
-            <MessageContent content={m.content} />
-            <MessageActions content={m.content} />
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Per-message actions every frontier chat has: copy to clipboard + read aloud (TTS).
-function MessageActions({ content }: { content: string }) {
-  const [copied, setCopied] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-
-  const copy = () => {
-    navigator.clipboard?.writeText(content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
-  const speak = () => {
-    const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
-    if (!synth) {
-      toast.error("Text-to-speech isn't supported in this browser.");
-      return;
-    }
-    if (speaking) {
-      synth.cancel();
-      setSpeaking(false);
-      return;
-    }
-    // Strip markdown noise so it reads naturally.
-    const clean = content.replace(/[#*`>_~|]/g, " ").replace(/\[(.*?)\]\((.*?)\)/g, "$1").replace(/\s+/g, " ").trim();
-    const u = new SpeechSynthesisUtterance(clean);
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
-    synth.cancel();
-    synth.speak(u);
-    setSpeaking(true);
-  };
-
-  return (
-    <div className="mt-1.5 flex items-center gap-1">
-      <button
-        onClick={copy}
-        title="Copy message"
-        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded"
-      >
-        {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-        {copied ? "Copied" : "Copy"}
-      </button>
-      <button
-        onClick={speak}
-        title={speaking ? "Stop" : "Read aloud"}
-        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded"
-      >
-        {speaking ? <Square className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-        {speaking ? "Stop" : "Listen"}
-      </button>
-    </div>
-  );
-}
-
-function TypingDots() {
-  return (
-    <div className="flex items-center gap-1 py-2" aria-label="Assistant is typing">
-      {[0, 1, 2].map((i) => (
-        <span key={i} className="w-2 h-2 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
-      ))}
-    </div>
-  );
-}
-
-function EmptyState({ onNew }: { onNew: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
-      <div className="w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-        <Sparkles className="w-7 h-7 text-primary" />
-      </div>
-      <div>
-        <h2 className="text-lg font-semibold">Welcome to AURA-OMEGA</h2>
-        <p className="text-sm text-muted-foreground mt-1 max-w-sm">Start a conversation from the operations console. AURA-OMEGA routes goals through the BOS Governor, tool matrix, n8n workflows, and verification ledger.</p>
-      </div>
-      <button onClick={onNew} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary/15 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/25 transition-colors">
-        <Plus className="w-4 h-4" /> New chat
-      </button>
-    </div>
-  );
-}
-
-function EmptyConversation({ onPrompt }: { onPrompt: (p: string) => void }) {
-  const suggestions = [
-    { label: "Social post", prompt: "Write + post a lead-gen Instagram post for AI automation, with a real cited stat" },
-    { label: "Email sequence", prompt: "Draft a 7-email nurture sequence (CAN-SPAM compliant) for a real-estate audience" },
-    { label: "Content calendar", prompt: "Build a 30-day social media content calendar for a fitness coaching brand" },
-    { label: "Market research", prompt: "Research the EV market and build a downloadable PDF brief with TAM/SAM/SOM" },
-    { label: "Web scrape", prompt: "Scrape news.ycombinator.com and give me the top 5 stories as a table" },
-    { label: "Image gen", prompt: "Generate an ultra realistic image of a husky in the snow" },
-  ];
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center gap-6">
-      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/10 border border-primary/20 flex items-center justify-center shadow-lg shadow-primary/10">
-        <Bot className="w-7 h-7 text-primary" />
-      </div>
-      <div className="space-y-1.5">
-        <h2 className="text-lg font-semibold tracking-tight">What should AURA-OMEGA do?</h2>
-        <p className="text-sm text-muted-foreground max-w-xs">Type a goal or pick one below — the swarm handles the rest.</p>
-      </div>
-      <div className="grid grid-cols-2 gap-2 w-full max-w-sm px-1 sm:px-0">
-        {suggestions.map((s) => (
-          <button
-            key={s.label}
-            onClick={() => onPrompt(s.prompt)}
-            className="text-left rounded-xl border border-border bg-card/70 px-3.5 py-3 hover:border-primary/40 hover:bg-card hover:shadow-sm transition-all group"
-          >
-            <div className="text-xs font-semibold text-primary mb-0.5 group-hover:text-primary">{s.label}</div>
-            <div className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2">{s.prompt}</div>
-          </button>
-        ))}
       </div>
     </div>
   );
