@@ -88,7 +88,7 @@ export default function Settings() {
               "flex items-center gap-2 px-3 py-2 sm:py-2.5 rounded-lg text-xs sm:text-sm transition-all whitespace-nowrap shrink-0",
               tab === t.id ? "bg-[hsl(24_95%_53%/0.12)] text-orange-400 font-medium" : "text-[hsl(0_0%_50%)] hover:text-white hover:bg-[hsl(0_0%_10%)]"
             )}>
-              <span className={tab === t.id ? "text-orange-400" : "text-[hsl(0_0%_40%)]"]}>{t.icon}</span>
+              <span className={tab === t.id ? "text-orange-400" : "text-[hsl(0_0%_40%)]"}>{t.icon}</span>
               {t.label}
             </button>
           ))}
