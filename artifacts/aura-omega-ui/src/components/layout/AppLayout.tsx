@@ -1,468 +1,272 @@
 import { Link, useLocation } from "wouter";
 import {
-  Activity,
-  Bot,
-  BrainCircuit,
-  CalendarClock,
-  KeyRound,
+  Diamond,
+  Plug,
   MessageSquare,
-  MoreHorizontal,
-  Network,
-  Settings as SettingsIcon,
-  ShieldCheck,
-  StickyNote,
-  Workflow,
-  X,
   Plus,
-  Pencil,
-  Trash2,
-  ServerCog,
+  ChevronDown,
+  Menu,
+  MessageSquarePlus,
   Sparkles,
-  Boxes,
-  Smartphone,
-  Rocket,
+  Loader2,
+  Scan,
+  PenTool,
+  Hash,
+  Share2,
+  Send,
+  Settings,
   LogOut,
+  User,
+  Zap,
+  Globe,
+  Brain,
+  Layers,
+  Terminal,
+  Calendar,
+  Clock,
+  ChevronRight,
+  MoreHorizontal,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
-import {
-  useListChannels,
-  useCreateChannel,
-  getListChannelsQueryKey,
-  resolveApiUrl,
-  useGetAuthStatus,
-  useLogout,
-  getGetAuthStatusQueryKey,
-} from "@workspace/api-client-react";
+import { Button } from "@/components/ui/button";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useAuth } from "@/hooks/use-auth";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-// Manus-style navigation: chat threads live on the left rail, everything else
-// sits behind a single "More" drawer. No theatrical 12-link sidebar.
-const moreNav = [
-  { href: "/scratchpad",  icon: StickyNote,    label: "Scratchpad",    hint: "Pinned context — ABBY reads this always" },
-  { href: "/hermes",      icon: Boxes,         label: "Hermes",        hint: "Runtime · skills · heartbeat" },
-  { href: "/remote",      icon: Smartphone,    label: "Remote Control",hint: "BOS-OMEGA devices" },
-  { href: "/missions",    icon: Rocket,        label: "Missions",      hint: "Durable mission kernel" },
-  { href: "/agents",      icon: Bot,           label: "Agents",        hint: "ABBY + AURAs" },
-  { href: "/tasks",       icon: Network,       label: "Tasks",         hint: "Task queue" },
-  { href: "/tools",       icon: Workflow,      label: "Tools",         hint: "Tool matrix" },
-  { href: "/cron",        icon: CalendarClock, label: "Cron",          hint: "Scheduled jobs" },
-  { href: "/runtimes",    icon: ServerCog,     label: "Runtimes",      hint: "LLM providers" },
-  { href: "/integrations",icon: KeyRound,      label: "Integrations",  hint: "Composio · Firecrawl · Steel" },
-  { href: "/settings",    icon: SettingsIcon,  label: "Settings",      hint: "Operator controls" },
-];
-
-function isActive(location: string, href: string) {
-  if (href === "/") return location === "/";
-  return location === href || location.startsWith(`${href}/`);
+interface AppLayoutProps {
+  children: React.ReactNode;
 }
 
-function MoreDrawer({
-  open,
-  onClose,
-  location,
-}: {
-  open: boolean;
-  onClose: () => void;
-  location: string;
-}) {
-  if (!open) return null;
-  return (
-    <>
-      <div
-        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        className={cn(
-          "fixed top-0 left-0 bottom-0 z-50 bg-card border-r border-border",
-          "flex flex-col w-[88%] max-w-[360px] sm:w-72",
-        )}
-        role="dialog"
-        aria-label="More navigation"
-      >
-        <div className="flex items-center justify-between px-4 py-4 border-b border-border shrink-0">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold">More</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="min-h-[44px] min-w-[44px] -mr-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-2" aria-label="More navigation">
-          {moreNav.map((item) => {
-            const active = isActive(location, item.href);
-            const Icon = item.icon;
-            return (
-              <Link key={item.href} href={item.href}>
-                <div
-                  onClick={onClose}
-                  className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 min-h-[44px] cursor-pointer transition-colors",
-                    active
-                      ? "bg-primary/12 text-primary"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  <Icon
-                    className="w-[18px] h-[18px] shrink-0"
-                    strokeWidth={active ? 2.2 : 1.75}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className={cn("text-sm leading-none", active && "font-semibold")}>
-                      {item.label}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground/70 leading-none mt-1 truncate">
-                      {item.hint}
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-        </nav>
-      </div>
-    </>
-  );
+interface TaskItem {
+  id: string;
+  title: string;
+  active?: boolean;
+  icon?: React.ReactNode;
 }
 
-function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
-  const qc = useQueryClient();
-  const [, navigate] = useLocation();
-  const { data: channelsData, isLoading } = useListChannels({
-    query: { refetchInterval: 8000, queryKey: getListChannelsQueryKey() },
-  });
-  const channels = Array.isArray(channelsData) ? channelsData : [];
-  const createChannel = useCreateChannel();
+interface SectionProps {
+  title: string;
+  items: TaskItem[];
+  defaultOpen?: boolean;
+}
 
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editName, setEditName] = useState("");
-
-  const startEdit = (id: number, currentName: string) => {
-    setEditingId(id);
-    setEditName(currentName);
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
-    setEditName("");
-  };
-
-  const saveEdit = async (id: number) => {
-    const trimmed = editName.trim();
-    if (!trimmed) {
-      cancelEdit();
-      return;
-    }
-    try {
-      const res = await fetch(resolveApiUrl(`/api/channels/${id}`), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
-    } catch (err) {
-      toast.error("Couldn't rename thread");
-    } finally {
-      cancelEdit();
-    }
-  };
-
-  const deleteChannel = async (id: number) => {
-    if (!confirm("Delete this thread and all its messages?")) return;
-    try {
-      const res = await fetch(resolveApiUrl(`/api/channels/${id}`), {
-        method: "DELETE",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
-      // If we deleted the active one, route to /
-      navigate("/chat");
-    } catch (err) {
-      toast.error("Couldn't delete thread");
-    }
-  };
-
-  const handleNewChat = async () => {
-    try {
-      const result = await createChannel.mutateAsync({ data: { name: "New chat", type: "general" } });
-      const newId = (result as { id?: number })?.id;
-      qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
-      if (newId) {
-        navigate(`/chat?c=${newId}`);
-      }
-      onItemClick?.();
-    } catch (err) {
-      toast.error("Couldn't create thread");
-    }
-  };
+function SidebarSection({ title, items, defaultOpen = true }: SectionProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="mb-2">
       <button
-        onClick={handleNewChat}
-        disabled={createChannel.isPending}
-        className={cn(
-          "mx-2 mt-2 mb-3 flex items-center justify-center gap-2 rounded-xl px-3 min-h-[44px]",
-          "bg-primary/12 text-primary border border-primary/20",
-          "hover:bg-primary/20 active:bg-primary/25 transition-colors text-sm font-medium",
-          "disabled:opacity-50",
-        )}
-        data-testid="new-chat-button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors w-full"
       >
-        <Plus className="w-4 h-4" />
-        New chat
+        <ChevronDown className={cn("w-3 h-3 transition-transform", !isOpen && "-rotate-90")} />
+        {title}
       </button>
-
-      <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
-        {isLoading && channels.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground/60 px-3 py-2">Loading…</div>
-        ) : channels.length === 0 ? (
-          <div className="text-[11px] text-muted-foreground/60 px-3 py-2">
-            No threads yet.
-          </div>
-        ) : (
-          channels.map((c) => {
-            const isEditing = editingId === c.id;
-            return (
-              <div
-                key={c.id}
-                className={cn(
-                  "group flex items-center gap-1 rounded-xl px-2 min-h-[44px] cursor-pointer transition-colors",
-                  "hover:bg-muted active:bg-muted/70 text-foreground/85",
-                )}
-                onClick={() => {
-                  if (!isEditing) {
-                    navigate(`/chat?c=${c.id}`);
-                    onItemClick?.();
-                  }
-                }}
-              >
-                <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground/60" />
-                {isEditing ? (
-                  <input
-                    autoFocus
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={() => saveEdit(c.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") saveEdit(c.id);
-                      if (e.key === "Escape") cancelEdit();
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex-1 bg-transparent text-sm border-b border-primary outline-none"
-                  />
-                ) : (
-                  <span className="flex-1 text-sm truncate">{c.name}</span>
-                )}
-                {!isEditing && (
-                  <div className="opacity-0 group-hover:opacity-100 sm:group-focus-within:opacity-100 flex items-center gap-0.5 transition-opacity">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startEdit(c.id, c.name);
-                      }}
-                      className="min-h-[32px] min-w-[32px] p-1.5 rounded hover:bg-background/60 active:bg-background/80 flex items-center justify-center"
-                      aria-label="Rename"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteChannel(c.id);
-                      }}
-                      className="min-h-[32px] min-w-[32px] p-1.5 rounded hover:bg-background/60 active:bg-background/80 flex items-center justify-center"
-                      aria-label="Delete"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
+      {isOpen && (
+        <div className="space-y-0.5 mt-1">
+          {items.map((item) => (
+            <div
+              key={item.id}
+              className={cn(
+                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-all group",
+                item.active
+                  ? "bg-white/10 text-white"
+                  : "text-gray-400 hover:bg-white/5 hover:text-white"
+              )}
+            >
+              {item.icon && <span className="text-gray-500 group-hover:text-gray-300">{item.icon}</span>}
+              <span className="flex-1 truncate">{item.title}</span>
+              {item.active && <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-export function AppLayout({ children }: { children: React.ReactNode }) {
-  const [location, navigate] = useLocation();
-  const [heartbeat, setHeartbeat] = useState<"online" | "offline" | "unknown">("unknown");
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
-  const qc = useQueryClient();
-  const { data: authStatus } = useGetAuthStatus();
-  const logout = useLogout();
-
-  const handleLogout = async () => {
-    await logout.mutateAsync();
-    qc.invalidateQueries({ queryKey: getGetAuthStatusQueryKey() });
-  };
+export default function AppLayout({ children }: AppLayoutProps) {
+  const [location] = useLocation();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const isMobile = useIsMobile();
+  const { user, logoutMutation } = useAuth();
+  const queryClient = useQueryClient();
 
   useEffect(() => {
-    let alive = true;
-    const ping = async () => {
-      try {
-        const res = await fetch("/api/hermes/status");
-        if (alive) setHeartbeat(res.ok ? "online" : "offline");
-      } catch {
-        if (alive) setHeartbeat("offline");
-      }
-    };
-    ping();
-    const id = window.setInterval(ping, 15000);
-    return () => { alive = false; window.clearInterval(id); };
-  }, []);
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile]);
 
-  return (
-    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans flex-col md:flex-row">
+  const handleLogout = () => {
+    logoutMutation.mutate(undefined, {
+      onSuccess: () => {
+        queryClient.clear();
+        toast.success("Logged out successfully");
+      },
+    });
+  };
 
-      {/* ── Desktop sidebar — chat threads only (Manus-style) ───────────── */}
-      <aside className="hidden md:flex w-60 flex-shrink-0 border-r border-border bg-card flex-col">
-        {/* Logo */}
-        <Link href="/chat" data-testid="link-aura-logo">
-          <div className="flex items-center gap-3 px-4 py-4 cursor-pointer group select-none border-b border-border">
-            <div className="relative w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25 shrink-0">
-              <BrainCircuit className="w-4 h-4 text-primary" />
-              <span className={cn(
-                "absolute -right-0.5 -top-0.5 w-2 h-2 rounded-full border-2 border-card",
-                heartbeat === "online"  ? "bg-emerald-400 animate-pulse" :
-                heartbeat === "offline" ? "bg-destructive" :
-                                          "bg-muted-foreground",
-              )} />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-black tracking-tight">AURA-OMEGA</div>
-              <div className="text-[10px] text-muted-foreground font-medium">Hermes runtime</div>
-            </div>
-          </div>
-        </Link>
+  const todayTasks: TaskItem[] = [
+    { id: "1", title: "API Key Pricing Guide", active: true },
+  ];
 
-        <ChatThreadList />
+  const previousTasks: TaskItem[] = [
+    { id: "2", title: "Dollar Lead Connect" },
+    { id: "3", title: "Interactive courtroom visualization" },
+    { id: "4", title: "Minimax M3 Hallucination Guide" },
+    { id: "5", title: "Medical Records Access Systems" },
+  ];
 
-        {/* Bottom: More button + status */}
-        <div className="border-t border-border p-2 space-y-1">
-          <button
-            onClick={() => setMoreOpen(true)}
-            className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-            data-testid="more-button"
-          >
-            <MoreHorizontal className="w-4 h-4" />
-            More
-          </button>
-          <div className={cn(
-            "flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px]",
-            heartbeat === "online"
-              ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"
-              : "border-border bg-muted/40 text-muted-foreground",
-          )}>
-            <ShieldCheck className="w-3 h-3 shrink-0" />
-            <span className="font-medium truncate">
-              {heartbeat === "online" ? "Online" : heartbeat === "offline" ? "Offline" : "Checking…"}
-            </span>
-          </div>
-          {authStatus?.authenticated && (
-            <button
-              onClick={handleLogout}
-              disabled={logout.isPending}
-              className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
-              data-testid="logout-button"
-            >
-              <LogOut className="w-4 h-4 shrink-0" />
-              <span className="flex-1 text-left truncate">{authStatus.displayName ?? authStatus.username}</span>
-            </button>
-          )}
+  const navItems = [
+    { icon: <Diamond className="w-4 h-4" />, label: "Skills", href: "/skills" },
+    { icon: <Plug className="w-4 h-4" />, label: "Connectors", href: "/connectors" },
+    { icon: <MessageSquare className="w-4 h-4" />, label: "Instructions", href: "/instructions" },
+  ];
+
+  const SidebarContent = () => (
+    <div className="flex flex-col h-full bg-[#1a1a1a] border-r border-white/5">
+      {/* Header */}
+      <div className="p-4 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-500/20">
+          <span className="text-white font-bold text-sm">A</span>
         </div>
-      </aside>
-
-      {/* ── Main content ────────────────────────────────────────────────── */}
-      <main className="flex-1 flex min-w-0 min-h-0 overflow-hidden">
-        {children}
-      </main>
-
-      {/* ── More drawer (desktop + mobile) ──────────────────────────────── */}
-      <MoreDrawer open={moreOpen} onClose={() => setMoreOpen(false)} location={location} />
-
-      {/* ── Mobile: thread drawer ───────────────────────────────────────── */}
-      {mobileDrawerOpen && (
-        <div
-          className="md:hidden fixed inset-0 bg-black/40 z-40 backdrop-blur-sm"
-          onClick={() => setMobileDrawerOpen(false)}
-        />
-      )}
-      <div className={cn(
-        "md:hidden fixed top-0 left-0 bottom-0 z-50 bg-card border-r border-border",
-        "flex flex-col transition-transform duration-200 w-[88%] max-w-[360px]",
-        mobileDrawerOpen ? "translate-x-0" : "-translate-x-full",
-      )}>
-        <Link href="/chat" data-testid="link-aura-logo-mobile">
-          <div
-            onClick={() => setMobileDrawerOpen(false)}
-            className="flex items-center gap-3 px-4 py-4 cursor-pointer border-b border-border min-h-[60px]"
-          >
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25 shrink-0">
-              <BrainCircuit className="w-4 h-4 text-primary" />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-black tracking-tight">AURA-OMEGA</div>
-              <div className="text-[10px] text-muted-foreground font-medium">Hermes runtime</div>
-            </div>
-          </div>
-        </Link>
-        <ChatThreadList onItemClick={() => setMobileDrawerOpen(false)} />
+        <span className="font-semibold text-white text-sm tracking-tight">AURA-OMEGA</span>
+        <button 
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          className="ml-auto p-1.5 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors"
+        >
+          <ChevronRight className={cn("w-4 h-4 transition-transform", !sidebarOpen && "rotate-180")} />
+        </button>
       </div>
 
-      {/* ── Mobile bottom nav ───────────────────────────────────────────── */}
-      <nav
-        className="md:hidden w-full flex-shrink-0 flex items-stretch border-t border-border bg-card z-20"
-        aria-label="Mobile navigation"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      >
-        <button
-          onClick={() => setMobileDrawerOpen(true)}
-          className={cn(
-            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
-            mobileDrawerOpen ? "text-primary" : "text-muted-foreground",
-          )}
-          aria-label="Open threads"
-        >
-          <MessageSquare className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">Threads</span>
+      {/* Work Section */}
+      <div className="px-3 py-2">
+        <button className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
+          <span className="font-medium">Work</span>
+          <ChevronDown className="w-3 h-3" />
         </button>
-        <button
-          onClick={() => navigate("/hermes")}
-          className={cn(
-            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
-            isActive(location, "/hermes") ? "text-primary" : "text-muted-foreground",
-          )}
-          aria-label="Hermes"
-        >
-          <Boxes className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">Hermes</span>
-        </button>
-        <button
-          onClick={() => setMoreOpen(true)}
-          className={cn(
-            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
-            moreOpen ? "text-primary" : "text-muted-foreground",
-          )}
-          aria-label="More"
-        >
-          <MoreHorizontal className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">More</span>
-        </button>
+      </div>
+
+      {/* Nav Items */}
+      <nav className="px-2 space-y-0.5">
+        {navItems.map((item) => (
+          <Link key={item.href} href={item.href}>
+            <div className={cn(
+              "flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-all",
+              location === item.href
+                ? "bg-white/10 text-white"
+                : "text-gray-400 hover:bg-white/5 hover:text-white"
+            )}>
+              {item.icon}
+              <span>{item.label}</span>
+            </div>
+          </Link>
+        ))}
       </nav>
+
+      {/* Projects */}
+      <div className="mt-4 px-3">
+        <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Projects</h3>
+        <button className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors py-1">
+          <Plus className="w-4 h-4" />
+          <span>New Project</span>
+        </button>
+      </div>
+
+      {/* Scrollable Task Sections */}
+      <div className="flex-1 overflow-y-auto px-2 mt-2">
+        <SidebarSection title="Today" items={todayTasks} />
+        <SidebarSection title="Previous 7 days" items={previousTasks} defaultOpen={true} />
+      </div>
+
+      {/* New Task Button */}
+      <div className="p-3">
+        <button className="w-full py-2.5 px-4 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-lg shadow-orange-500/20 hover:shadow-orange-500/30">
+          <Plus className="w-4 h-4" />
+          New Task
+        </button>
+      </div>
+
+      {/* User */}
+      <div className="p-3 border-t border-white/5">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-3 w-full hover:bg-white/5 rounded-lg p-2 transition-colors">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center border border-white/10">
+                <span className="text-white text-xs font-medium">
+                  {user?.username?.slice(0, 2).toUpperCase() || "LL"}
+                </span>
+              </div>
+              <div className="flex-1 text-left">
+                <p className="text-sm font-medium text-white">{user?.username || "Luis Lacerda"}</p>
+                <p className="text-xs text-gray-500">Free</p>
+              </div>
+              <MoreHorizontal className="w-4 h-4 text-gray-500" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56 bg-[#252525] border-white/10">
+            <DropdownMenuItem className="text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer">
+              <User className="w-4 h-4 mr-2" />
+              Profile
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer">
+              <Settings className="w-4 h-4 mr-2" />
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="bg-white/10" />
+            <DropdownMenuItem 
+              onClick={handleLogout}
+              className="text-red-400 hover:text-red-300 hover:bg-white/5 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Logout
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen bg-[#0d0d0d] text-white overflow-hidden">
+      {/* Desktop Sidebar */}
+      {!isMobile && (
+        <aside 
+          className={cn(
+            "transition-all duration-300 ease-in-out flex-shrink-0",
+            sidebarOpen ? "w-72" : "w-0 overflow-hidden"
+          )}
+        >
+          <SidebarContent />
+        </aside>
+      )}
+
+      {/* Mobile Sidebar */}
+      {isMobile && (
+        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+          <SheetContent side="left" className="w-72 p-0 bg-[#1a1a1a] border-r border-white/5">
+            <SidebarContent />
+          </SheetContent>
+        </Sheet>
+      )}
+
+      {/* Main Content */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {children}
+      </main>
     </div>
   );
 }
