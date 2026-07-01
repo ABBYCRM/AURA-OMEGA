@@ -5,52 +5,52 @@
    fails to build under Tailwind v4: `Cannot apply unknown utility class
    bg-background`. That broken build is why Render kept serving a stale bundle.) */
 @theme {
-  --color-background: #0e0e0e;
-  --color-foreground: #f2f2f2;
-  --color-card: #121212;
-  --color-card-foreground: #f2f2f2;
+  --color-background: #1a1a1a;
+  --color-foreground: #f4f4f4;
+  --color-card: #242424;
+  --color-card-foreground: #f4f4f4;
   --color-primary: #f97015;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #1f1f1f;
-  --color-muted: #242424;
-  --color-muted-foreground: #8c8c8c;
-  --color-accent: #242424;
+  --color-secondary: #2b2b2b;
+  --color-muted: #303030;
+  --color-muted-foreground: #a6a6a6;
+  --color-accent: #303030;
   --color-destructive: #7f1d1d;
-  --color-border: #292929;
-  --color-input: #292929;
+  --color-border: #363636;
+  --color-input: #363636;
   --color-ring: #f97015;
 }
 
 /* HSL custom props kept for the handful of rules that reference them directly
    via hsl(var(--sidebar-*)) (shadows, sidebar tokens not exposed as utilities). */
 :root {
-  --background: 0 0% 5.5%;
-  --foreground: 0 0% 95%;
-  --card: 0 0% 7%;
-  --card-foreground: 0 0% 95%;
-  --popover: 0 0% 7%;
-  --popover-foreground: 0 0% 95%;
+  --background: 0 0% 10.2%;
+  --foreground: 0 0% 96%;
+  --card: 0 0% 14%;
+  --card-foreground: 0 0% 96%;
+  --popover: 0 0% 14%;
+  --popover-foreground: 0 0% 96%;
   --primary: 24 95% 53%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 12%;
-  --secondary-foreground: 0 0% 95%;
-  --muted: 0 0% 14%;
-  --muted-foreground: 0 0% 55%;
-  --accent: 0 0% 14%;
-  --accent-foreground: 0 0% 95%;
+  --secondary: 0 0% 17%;
+  --secondary-foreground: 0 0% 96%;
+  --muted: 0 0% 19%;
+  --muted-foreground: 0 0% 65%;
+  --accent: 0 0% 19%;
+  --accent-foreground: 0 0% 96%;
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 16%;
-  --input: 0 0% 16%;
+  --border: 0 0% 21%;
+  --input: 0 0% 21%;
   --ring: 24 95% 53%;
   --radius: 0.625rem;
-  --sidebar-background: 0 0% 6%;
-  --sidebar-foreground: 0 0% 80%;
+  --sidebar-background: 0 0% 11%;
+  --sidebar-foreground: 0 0% 82%;
   --sidebar-primary: 24 95% 53%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 0 0% 12%;
-  --sidebar-accent-foreground: 0 0% 95%;
-  --sidebar-border: 0 0% 14%;
+  --sidebar-accent: 0 0% 17%;
+  --sidebar-accent-foreground: 0 0% 96%;
+  --sidebar-border: 0 0% 19%;
   --sidebar-ring: 24 95% 53%;
 }
 

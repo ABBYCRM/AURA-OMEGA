@@ -15,7 +15,9 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
     e.preventDefault();
     setError(null);
     try {
-      await login.mutateAsync({ data: { username, password } });
+      // Runtime-verified shape (generated mutationFn unwraps props.data → login body).
+      // Cast because the package's compiled types can lag the server contract.
+      await login.mutateAsync({ data: { username, password } } as never);
       onAuthenticated();
     } catch {
       setError("Invalid username or password");

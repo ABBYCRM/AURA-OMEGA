@@ -31,6 +31,19 @@ export default function Settings() {
   const [personalityError, setPersonalityError] = useState("");
   const [personalityLoading, setPersonalityLoading] = useState(false);
 
+  /* API Keys (vault) */
+  const [keyName, setKeyName] = useState("");
+  const [keyValue, setKeyValue] = useState("");
+  const [keyDesc, setKeyDesc] = useState("");
+  const [keySaving, setKeySaving] = useState(false);
+  const [keyMsg, setKeyMsg] = useState("");
+  const [vaultKeys, setVaultKeys] = useState<Array<{ name: string; description?: string }>>([]);
+
+  /* Composio */
+  const [composioToolkit, setComposioToolkit] = useState("gmail");
+  const [composioConnecting, setComposioConnecting] = useState(false);
+  const [composioMsg, setComposioMsg] = useState("");
+
   /* Load settings on mount */
   useEffect(() => {
     fetch("/api/settings/runtime")
@@ -49,7 +62,52 @@ export default function Settings() {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d?.systemPersonality != null) setPersonality(d.systemPersonality); })
       .catch(() => undefined);
+
+    loadVault();
   }, []);
+
+  function loadVault() {
+    fetch("/api/vault")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (Array.isArray(d?.secrets)) setVaultKeys(d.secrets); })
+      .catch(() => undefined);
+  }
+
+  async function saveKey() {
+    if (!keyName.trim() || !keyValue.trim()) { setKeyMsg("Name and value are required."); return; }
+    setKeySaving(true); setKeyMsg("");
+    try {
+      const res = await fetch("/api/vault", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: keyName.trim(), value: keyValue, description: keyDesc.trim() || undefined }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || `${res.status}`);
+      setKeyMsg(`Saved ${keyName.trim()} — active now.`);
+      setKeyName(""); setKeyValue(""); setKeyDesc("");
+      loadVault();
+    } catch (e) { setKeyMsg(`Failed: ${String(e).replace("Error: ", "")}`); }
+    finally { setKeySaving(false); }
+  }
+
+  async function connectComposio() {
+    if (!composioToolkit.trim()) return;
+    setComposioConnecting(true); setComposioMsg("");
+    try {
+      const res = await fetch("/api/integrations/composio/connect", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toolkit: composioToolkit.trim().toLowerCase() }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out?.hint || out?.error || `${res.status}`);
+      if (out?.redirectUrl) {
+        setComposioMsg(`Opening ${composioToolkit} authorization…`);
+        window.open(out.redirectUrl, "_blank", "noopener");
+      } else {
+        setComposioMsg(`Connection created for ${composioToolkit} (id=${out?.connectionId ?? "?"}). Check the Composio dashboard if no redirect appeared.`);
+      }
+    } catch (e) { setComposioMsg(`Failed: ${String(e).replace("Error: ", "")}`); }
+    finally { setComposioConnecting(false); }
+  }
 
   async function saveRuntime() {
     setSaveError(""); setSaved(false);
@@ -202,37 +260,79 @@ export default function Settings() {
             <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-3 sm:p-4 flex items-start gap-2.5">
               <Info size={14} className="text-blue-400 shrink-0 mt-0.5" />
               <div>
-                <p className="text-xs text-blue-400 font-medium">Security Note</p>
-                <p className="text-[10px] sm:text-[11px] text-[hsl(0_0%_50%)]">API keys are stored in environment variables on the server. They are never exposed to the frontend or LLM prompts. Use <code className="text-orange-400">{`{{secret:NAME}}`}</code> in commands.</p>
+                <p className="text-xs text-blue-400 font-medium">Write-only vault</p>
+                <p className="text-[10px] sm:text-[11px] text-[hsl(0_0%_55%)]">Keys are encrypted server-side and never shown back or exposed to the model. Reference them in commands as <code className="text-orange-400">{`{{secret:NAME}}`}</code>. The name becomes a live env var, so integrations turn on immediately.</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {[
-                { name: "NVIDIA NIM", keys: "8 keys active", status: "active" },
-                { name: "Kimi K2.6", keys: "Fallback ready", status: "active" },
-                { name: "OpenAI", keys: "Tertiary ready", status: "active" },
-                { name: "A2E (Agent-to-Env)", keys: "Key added", status: "active" },
-                { name: "ScrapingBee", keys: "Active", status: "active" },
-                { name: "ScrapFly", keys: "Active", status: "active" },
-                { name: "Firecrawl", keys: "Active", status: "active" },
-                { name: "Steel", keys: "Active", status: "active" },
-                { name: "Tavily", keys: "Active", status: "active" },
-                { name: "Exa", keys: "Active", status: "active" },
-                { name: "Resend", keys: "Active", status: "active" },
-                { name: "Pinecone", keys: "Active", status: "active" },
-                { name: "E2B", keys: "Active", status: "active" },
-                { name: "ScreenshotOne", keys: "Active", status: "active" },
-              ].map(k => (
-                <div key={k.name} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-[hsl(0_0%_7%)] border border-[hsl(0_0%_14%)]">
-                  <div className={cn("w-2 h-2 rounded-full shrink-0", k.status === "active" ? "bg-green-500" : "bg-yellow-500")} />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-white truncate">{k.name}</div>
-                    <div className="text-[10px] text-[hsl(0_0%_40%)]">{k.keys}</div>
-                  </div>
-                  <span className="text-[9px] text-green-400 bg-green-500/10 px-1.5 py-0.5 rounded-full font-medium shrink-0">{k.status}</span>
+            {/* Add key form */}
+            <div className="bg-card rounded-xl border border-border p-3 sm:p-4">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-3"><Key size={14} className="text-orange-400" /> Add an API key</h3>
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <label className="block">
+                    <span className="text-[10px] font-semibold text-muted-foreground uppercase">Name</span>
+                    <input value={keyName} onChange={e => setKeyName(e.target.value)} placeholder="e.g. OPENAI_API_KEY" spellCheck={false}
+                      className="mt-1 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-white font-mono placeholder:text-[hsl(0_0%_40%)] focus:outline-none focus:border-orange-500/50" />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] font-semibold text-muted-foreground uppercase">Description (optional)</span>
+                    <input value={keyDesc} onChange={e => setKeyDesc(e.target.value)} placeholder="What it's for"
+                      className="mt-1 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-white placeholder:text-[hsl(0_0%_40%)] focus:outline-none focus:border-orange-500/50" />
+                  </label>
                 </div>
-              ))}
+                <label className="block">
+                  <span className="text-[10px] font-semibold text-muted-foreground uppercase">Value</span>
+                  <input value={keyValue} onChange={e => setKeyValue(e.target.value)} type="password" placeholder="Paste the secret — write-only" autoComplete="off" spellCheck={false}
+                    className="mt-1 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-white font-mono placeholder:text-[hsl(0_0%_40%)] focus:outline-none focus:border-orange-500/50" />
+                </label>
+                <div className="flex items-center gap-3 pt-1">
+                  <button onClick={saveKey} disabled={keySaving} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium transition-colors">
+                    <Save size={14} /> {keySaving ? "Saving…" : "Save key"}
+                  </button>
+                  {keyMsg && <span className={cn("text-xs", keyMsg.startsWith("Failed") ? "text-red-400" : "text-green-400")}>{keyMsg}</span>}
+                </div>
+              </div>
+            </div>
+
+            {/* Connect an app via Composio */}
+            <div className="bg-card rounded-xl border border-border p-3 sm:p-4">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-1"><Sparkles size={14} className="text-orange-400" /> Connect an app (Composio)</h3>
+              <p className="text-[11px] text-muted-foreground mb-3">OAuth into Gmail, Slack, GitHub, Notion, Google Calendar/Sheets and 250+ apps so the swarm can act on your accounts. Pick an app and authorize.</p>
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <select value={composioToolkit} onChange={e => setComposioToolkit(e.target.value)}
+                  className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm text-white focus:outline-none focus:border-orange-500/50">
+                  {["gmail","googlecalendar","googlesheets","googledrive","slack","github","notion","linkedin","x","instagram","discord","hubspot","airtable","trello","asana"].map(a => (
+                    <option key={a} value={a}>{a}</option>
+                  ))}
+                </select>
+                <button onClick={connectComposio} disabled={composioConnecting} className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm font-medium transition-colors whitespace-nowrap">
+                  {composioConnecting ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />} {composioConnecting ? "Connecting…" : "Connect"}
+                </button>
+              </div>
+              {composioMsg && <p className={cn("text-xs mt-2", composioMsg.startsWith("Failed") ? "text-red-400" : "text-green-400")}>{composioMsg}</p>}
+              <a href="/integrations" className="inline-block text-[11px] text-orange-400 hover:text-orange-300 mt-2">Full integrations console →</a>
+            </div>
+
+            {/* Stored keys */}
+            <div className="bg-card rounded-xl border border-border p-3 sm:p-4">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2 mb-3"><Lock size={14} className="text-green-400" /> Stored keys <span className="text-[10px] text-muted-foreground font-normal">({vaultKeys.length})</span></h3>
+              {vaultKeys.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No keys stored yet — add one above.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {vaultKeys.map(k => (
+                    <div key={k.name} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-background border border-border">
+                      <div className="w-2 h-2 rounded-full shrink-0 bg-green-500" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-mono font-medium text-white truncate">{k.name}</div>
+                        <div className="text-[10px] text-muted-foreground truncate">{k.description || "•••••••• encrypted"}</div>
+                      </div>
+                      <span className="text-[9px] text-green-400 bg-green-500/10 px-1.5 py-0.5 rounded-full font-medium shrink-0">active</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

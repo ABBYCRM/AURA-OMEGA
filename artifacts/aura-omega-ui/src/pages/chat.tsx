@@ -100,19 +100,25 @@ export default function ChatPage() {
     const sentInput = input;
     setInput("");
 
-    /* Send to REAL backend via useAiStream */
-    await aiStream.send({
+    /* Send to REAL backend via useAiStream. send() returns the final text
+       directly — reading aiStream.tokens here would be a stale closure value
+       (always empty), which is why every reply used to say "Processing complete." */
+    const result = await aiStream.send({
       message: sentInput,
       channelId: activeChannelId,
     });
 
-    /* Add assistant message with stream result */
+    /* Add assistant message with the actual stream result */
     setMessages(prev => [
       ...prev,
       {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: aiStream.tokens || "Processing complete.",
+        content: result.text.trim()
+          ? result.text
+          : result.error
+            ? `⚠️ ${result.error}`
+            : "On it — the swarm is running this now. Results will stream into this channel.",
         timestamp: new Date(),
       },
     ]);
