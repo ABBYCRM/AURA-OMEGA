@@ -12,8 +12,10 @@ const router = Router();
 
 // Sign in as a named user. Issues an HttpOnly session cookie on success.
 router.post("/auth/login", (req, res) => {
-  const body = req.body as { username?: unknown; password?: unknown } | undefined;
-  const username = verifyCredentials(body?.username, body?.password);
+  const body = req.body as { username?: unknown; password?: unknown; data?: { username?: unknown; password?: unknown } } | undefined;
+  const u = body?.username ?? body?.data?.username;
+  const p = body?.password ?? body?.data?.password;
+  const username = verifyCredentials(u, p);
   if (!username) {
     res.status(401).json({ error: "Invalid username or password" });
     return;
