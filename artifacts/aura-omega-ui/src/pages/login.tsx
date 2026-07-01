@@ -15,7 +15,7 @@ export default function LoginPage({ onAuthenticated }: { onAuthenticated: () => 
     e.preventDefault();
     setError(null);
     try {
-      await login.mutateAsync({ data: { username, password } });
+      await login.mutateAsync({ username, password } as any);
       onAuthenticated();
     } catch {
       setError("Invalid username or password");
