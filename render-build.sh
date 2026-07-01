@@ -11,8 +11,6 @@ export PATH="$PNPM_HOME:$PATH"
 npx --yes pnpm@9 --version
 
 # Strip Replit-specific fields from pnpm-workspace.yaml that pnpm 9 doesn't recognize.
-# These fields (minimumReleaseAge, minimumReleaseAgeExclude) are Replit-platform-only
-# and will cause unknown-field errors on standard pnpm.
 python3 - <<'PYEOF'
 import re, shutil, sys
 
@@ -20,11 +18,11 @@ src = open("pnpm-workspace.yaml").read()
 
 # Remove the big comment block + minimumReleaseAge field + minimumReleaseAgeExclude block
 src = re.sub(
-    r'# =+.*?# =+\n'      # banner comment
+    r'# =+.*?# =+\n'
     r'minimumReleaseAge:.*?\n'
     r'\n?'
     r'minimumReleaseAgeExclude:[^\n]*\n'
-    r'(?:  [^\n]*\n)*',    # indented list items
+    r'(?:  [^\n]*\n)*',
     '',
     src,
     flags=re.DOTALL
@@ -44,11 +42,27 @@ npx --yes pnpm@9 install --no-frozen-lockfile
 echo "=== Building lib packages ==="
 npx --yes pnpm@9 run typecheck:libs
 
+echo "=== Cleaning old API server dist ==="
+rm -rf artifacts/api-server/dist
+
 echo "=== Building API server ==="
-npx --yes pnpm@9 --filter @workspace/api-server run build
+npx --yes pnpm@9 --filter @workspace/api-server run build || {
+  echo "ERROR: API server build failed"
+  exit 1
+}
+
+echo "=== Verifying auth fix in built server ==="
+if grep -q "body.data" artifacts/api-server/dist/index.mjs; then
+  echo "✅ Auth fix present in built server"
+else
+  echo "WARNING: Auth fix not found in built server"
+fi
 
 echo "=== Building frontend UI ==="
-PORT=5000 BASE_PATH=/ npx --yes pnpm@9 --filter @workspace/aura-omega-ui run build
+PORT=5000 BASE_PATH=/ npx --yes pnpm@9 --filter @workspace/aura-omega-ui run build || {
+  echo "ERROR: UI build failed"
+  exit 1
+}
 
 echo "=== BUILD COMPLETE ==="
 ls -la artifacts/api-server/dist/
