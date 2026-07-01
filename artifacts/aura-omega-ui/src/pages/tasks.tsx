@@ -1,158 +1,151 @@
 import { useListTasks, getListTasksQueryKey } from "@workspace/api-client-react";
-import { LayoutGrid, Clock, PlayCircle, CheckCircle2, XCircle, PauseCircle, RotateCcw } from "lucide-react";
+import { useState } from "react";
+import {
+  Workflow, PlayCircle, CheckCircle2, XCircle, PauseCircle,
+  Clock, RotateCcw, Loader2, AlertTriangle, RefreshCw, Plus,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
+const statusIcons: Record<string, React.ReactNode> = {
+  queued: <Clock size={14} className="text-[hsl(0_0%_50%)]" />,
+  running: <PlayCircle size={14} className="text-orange-400 animate-pulse" />,
+  completed: <CheckCircle2 size={14} className="text-green-400" />,
+  failed: <XCircle size={14} className="text-red-400" />,
+  interrupted: <RotateCcw size={14} className="text-amber-400" />,
+  paused: <PauseCircle size={14} className="text-blue-400" />,
+};
+
+const statusColors: Record<string, string> = {
+  queued: "text-[hsl(0_0%_50%)] bg-[hsl(0_0%_12%)] border-[hsl(0_0%_18%)]",
+  running: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+  completed: "text-green-400 bg-green-500/10 border-green-500/20",
+  failed: "text-red-400 bg-red-500/10 border-red-500/20",
+  interrupted: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+  paused: "text-blue-400 bg-blue-500/10 border-blue-500/20",
+};
+
+const priorityColors: Record<string, string> = {
+  critical: "text-red-400 bg-red-500/10 border-red-500/20",
+  high: "text-orange-400 bg-orange-500/10 border-orange-500/20",
+  medium: "text-yellow-400 bg-yellow-500/10 border-yellow-500/20",
+  low: "text-blue-400 bg-blue-500/10 border-blue-500/20",
+};
+
 export default function Tasks() {
-  // Poll so this reflects what agents are doing RIGHT NOW, live.
   const { data: tasks = [], isLoading, isError, refetch } = useListTasks({
     query: { refetchInterval: 3000, queryKey: getListTasksQueryKey() },
   });
 
-  // Surface active work first: running → queued → paused → newest of the rest.
+  const [filter, setFilter] = useState<string>("all");
+
   const rank: Record<string, number> = { running: 0, queued: 1, paused: 2, failed: 3, interrupted: 5, completed: 4 };
-  const sorted = [...tasks].sort(
-    (a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.id - a.id,
-  );
-  const counts = tasks.reduce<Record<string, number>>((acc, t) => {
+  const sorted = [...tasks].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.id - a.id);
+
+  const filtered = filter === "all" ? sorted : sorted.filter((t: any) => t.status === filter);
+
+  const counts = tasks.reduce<Record<string, number>>((acc, t: any) => {
     acc[t.status] = (acc[t.status] ?? 0) + 1;
     return acc;
   }, {});
   const live = (counts["running"] ?? 0) + (counts["queued"] ?? 0);
 
-  const getStatusIcon = (status: string) => {
-    switch(status) {
-      case 'queued': return <Clock className="w-4 h-4 text-muted-foreground" />;
-      case 'running': return <PlayCircle className="w-4 h-4 text-primary animate-pulse" />;
-      case 'completed': return <CheckCircle2 className="w-4 h-4 text-green-500" />;
-      case 'failed': return <XCircle className="w-4 h-4 text-destructive" />;
-      case 'interrupted': return <RotateCcw className="w-4 h-4 text-amber-500" />;
-      case 'paused': return <PauseCircle className="w-4 h-4 text-accent" />;
-      default: return null;
-    }
-  };
-
-  const getPriorityColor = (priority: string) => {
-    switch(priority) {
-      case 'critical': return 'text-destructive border-destructive/50 bg-destructive/10';
-      case 'high': return 'text-orange-500 border-orange-500/50 bg-orange-500/10';
-      case 'medium': return 'text-yellow-500 border-yellow-500/50 bg-yellow-500/10';
-      case 'low': return 'text-blue-500 border-blue-500/50 bg-blue-500/10';
-      default: return 'text-muted-foreground border-card-border bg-card';
-    }
-  };
+  const statusFilters = [
+    { key: "all", label: "All", count: tasks.length },
+    { key: "running", label: "Running", count: counts["running"] || 0 },
+    { key: "queued", label: "Queued", count: counts["queued"] || 0 },
+    { key: "completed", label: "Done", count: counts["completed"] || 0 },
+    { key: "failed", label: "Failed", count: counts["failed"] || 0 },
+  ];
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-background overflow-hidden relative">
-      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-accent/5 via-background to-background"></div>
-      
-      <div className="p-4 sm:p-8 border-b border-card-border relative z-10 flex items-center gap-4">
-        <div className="w-12 h-12 bg-accent/10 rounded-lg flex items-center justify-center border border-accent/20">
-          <LayoutGrid className="w-6 h-6 text-accent" />
+    <div className="h-full overflow-y-auto no-scrollbar p-3 sm:p-4 lg:p-6 animate-fade-in">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4 sm:mb-6 pt-8 sm:pt-0">
+        <div>
+          <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">Tasks</h2>
+          <p className="text-xs sm:text-sm text-[hsl(0_0%_45%)] mt-0.5">What your agents are working on right now</p>
         </div>
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Tasks</h1>
-          <p className="text-sm text-muted-foreground mt-1">What your agents are working on right now.</p>
-        </div>
-        {!isLoading && !isError && tasks.length > 0 && (
-          <div className="ml-auto flex items-center gap-3 text-xs shrink-0">
-            <span className="flex items-center gap-1.5 text-foreground">
-              <span className={cn("w-2 h-2 rounded-full", live > 0 ? "bg-primary animate-pulse" : "bg-muted-foreground")} />
+        <div className="flex items-center gap-2">
+          {!isLoading && !isError && tasks.length > 0 && (
+            <span className="flex items-center gap-1.5 text-xs text-[hsl(0_0%_60%)] mr-2">
+              <span className={cn("w-2 h-2 rounded-full", live > 0 ? "bg-orange-400 animate-pulse" : "bg-[hsl(0_0%_35%)]")} />
               {live > 0 ? `${live} active` : "idle"}
             </span>
-            <span className="text-muted-foreground hidden sm:inline">
-              {counts["running"] ?? 0} running · {counts["queued"] ?? 0} queued · {counts["completed"] ?? 0} done · {counts["failed"] ?? 0} failed{counts["interrupted"] ? ` · ${counts["interrupted"]} interrupted` : ""}
-            </span>
-          </div>
-        )}
+          )}
+          <button className="flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium transition-colors shadow-lg shadow-orange-500/20">
+            <Plus size={14} /> New
+          </button>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 sm:p-8 relative z-10">
-        {isLoading ? (
-          <div className="flex items-center justify-center py-16 text-muted-foreground animate-pulse">Scanning queue…</div>
-        ) : isError ? (
-          <div className="flex flex-col items-center gap-2 py-16 text-muted-foreground">
-            <span>Couldn't load the task queue.</span>
-            <button onClick={() => refetch()} className="text-xs underline text-foreground hover:text-primary">Retry</button>
-          </div>
-        ) : tasks.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center gap-2 text-muted-foreground">
-            <LayoutGrid className="w-8 h-8 opacity-40" />
-            <span>No tasks yet — the swarm is idle.</span>
-            <span className="text-xs">Give the swarm a goal in <span className="text-foreground font-medium">Chat</span> and tasks will appear here live as agents work.</span>
-          </div>
-        ) : (
-          <>
-            {/* Desktop: table */}
-            <div className="hidden md:block bg-card/40 backdrop-blur-sm border border-card-border rounded-xl overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-card-border bg-card/50 text-[10px] uppercase tracking-widest text-muted-foreground font-bold">
-                    <th className="p-4">Status</th>
-                    <th className="p-4">Objective</th>
-                    <th className="p-4">Assigned Agent</th>
-                    <th className="p-4">Priority</th>
-                    <th className="p-4 w-[200px]">Progress</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map(task => (
-                    <tr key={task.id} className="border-b border-card-border hover:bg-card/60 transition-colors group">
-                      <td className="p-4">
-                        <div className="flex items-center gap-2">
-                          {getStatusIcon(task.status)}
-                          <span className="text-xs uppercase font-mono">{task.status}</span>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="font-medium text-sm">{task.title}</div>
-                        {task.description && <div className="text-xs text-muted-foreground line-clamp-1 mt-1">{task.description}</div>}
-                      </td>
-                      <td className="p-4">
-                        {task.agentName ? <span className="text-xs font-mono font-bold text-primary">{task.agentName}</span> : <span className="text-xs text-muted-foreground italic">Unassigned</span>}
-                      </td>
-                      <td className="p-4">
-                        <span className={cn("text-[10px] px-2 py-1 rounded-md border uppercase font-bold tracking-wider", getPriorityColor(task.priority))}>{task.priority}</span>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div className="h-1.5 flex-1 bg-background rounded-full overflow-hidden border border-card-border">
-                            <div className={cn("h-full transition-all duration-500", task.status === 'completed' ? "bg-green-500" : task.status === 'failed' ? "bg-destructive" : (task.status as string) === 'interrupted' ? "bg-amber-500" : "bg-primary")} style={{ width: `${task.progress || 0}%` }} />
-                          </div>
-                          <span className="text-xs font-mono w-8 text-right">{task.progress || 0}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      {/* Filter tabs */}
+      <div className="flex gap-1 mb-3 sm:mb-4 overflow-x-auto no-scrollbar">
+        {statusFilters.map(f => (
+          <button
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-[10px] sm:text-xs font-medium transition-all border shrink-0",
+              filter === f.key ? "bg-orange-500/10 text-orange-400 border-orange-500/30" : "bg-transparent text-[hsl(0_0%_45%)] border-transparent hover:bg-[hsl(0_0%_12%)]"
+            )}
+          >
+            {f.label}
+            <span className="text-[9px] text-[hsl(0_0%_40%)] bg-[hsl(0_0%_12%)] px-1 py-0.5 rounded-full">{f.count}</span>
+          </button>
+        ))}
+      </div>
 
-            {/* Mobile: cards */}
-            <div className="md:hidden space-y-3">
-              {sorted.map(task => (
-                <div key={task.id} className="bg-card/40 backdrop-blur-sm border border-card-border rounded-xl p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(task.status)}
-                      <span className="text-xs uppercase font-mono text-muted-foreground">{task.status}</span>
-                    </div>
-                    <span className={cn("text-[10px] px-2 py-1 rounded-md border uppercase font-bold tracking-wider shrink-0", getPriorityColor(task.priority))}>{task.priority}</span>
-                  </div>
-                  <div className="font-medium text-sm mt-2">{task.title}</div>
-                  {task.description && <div className="text-xs text-muted-foreground line-clamp-2 mt-1">{task.description}</div>}
-                  <div className="flex items-center justify-between mt-3 mb-1.5 text-xs">
-                    {task.agentName ? <span className="font-mono font-bold text-primary">{task.agentName}</span> : <span className="text-muted-foreground italic">Unassigned</span>}
-                    <span className="font-mono text-muted-foreground">{task.progress || 0}%</span>
-                  </div>
-                  <div className="h-1.5 bg-background rounded-full overflow-hidden border border-card-border">
-                    <div className={cn("h-full transition-all duration-500", task.status === 'completed' ? "bg-green-500" : task.status === 'failed' ? "bg-destructive" : (task.status as string) === 'interrupted' ? "bg-amber-500" : "bg-primary")} style={{ width: `${task.progress || 0}%` }} />
-                  </div>
+      {/* Content */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 size={20} className="text-orange-400 animate-spin" />
+          <span className="ml-2 text-sm text-[hsl(0_0%_45%)]">Scanning queue...</span>
+        </div>
+      ) : isError ? (
+        <div className="flex flex-col items-center gap-2 py-16 text-[hsl(0_0%_45%)]">
+          <AlertTriangle size={24} />
+          <span>Couldn&apos;t load the task queue.</span>
+          <button onClick={() => refetch()} className="text-xs underline text-white hover:text-orange-400">Retry</button>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center gap-2 text-[hsl(0_0%_45%)]">
+          <Workflow size={24} className="opacity-40" />
+          <span>No tasks match the current filter.</span>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((task: any) => (
+            <div key={task.id} className="bg-[hsl(0_0%_7%)] rounded-xl border border-[hsl(0_0%_14%)] p-3 sm:p-4 hover:border-[hsl(0_0%_20%)] transition-colors">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {statusIcons[task.status] || <Clock size={14} />}
+                  <span className={cn("text-xs font-medium capitalize", (statusColors[task.status] || "").split(" ")[0])}>{task.status}</span>
                 </div>
-              ))}
+                <div className="flex items-center gap-2 shrink-0">
+                  {task.priority && (
+                    <span className={cn("px-1.5 py-0.5 rounded-full text-[9px] font-medium border", priorityColors[task.priority] || "")}>{task.priority}</span>
+                  )}
+                </div>
+              </div>
+
+              <h3 className="text-sm font-medium text-white mb-1">{task.title}</h3>
+              {task.description && <p className="text-xs text-[hsl(0_0%_45%)] line-clamp-2 mb-2">{task.description}</p>}
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  {task.agentName ? <span className="text-[10px] font-mono font-bold text-orange-400">{task.agentName}</span> : <span className="text-[10px] text-[hsl(0_0%_40%)] italic">Unassigned</span>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 w-16 sm:w-24 bg-[hsl(0_0%_14%)] rounded-full overflow-hidden">
+                    <div className={cn("h-full rounded-full transition-all", task.status === "completed" ? "bg-green-500" : task.status === "failed" ? "bg-red-500" : "bg-orange-500")} style={{ width: `${task.progress || 0}%` }} />
+                  </div>
+                  <span className="text-[10px] font-mono text-[hsl(0_0%_40%)] w-8 text-right">{task.progress || 0}%</span>
+                </div>
+              </div>
             </div>
-          </>
-        )}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
