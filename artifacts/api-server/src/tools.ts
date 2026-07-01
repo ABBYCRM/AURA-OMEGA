@@ -560,7 +560,8 @@ function runSandboxed(language: string, source: string): Promise<string> {
     } else if (lang === "javascript" || lang === "js" || lang === "node") {
       runtime = "node";
       filename = "main.js";
-      runtimeArgs = [filename];
+      // Cap heap memory to 512 MB to prevent runaway memory consumption
+      runtimeArgs = ["--max-old-space-size=512", "--max-semi-space-size=64", filename];
     } else {
       resolve(`error: unsupported language "${language}". Use "python" or "javascript".`);
       return;
@@ -902,6 +903,12 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
       const language = String(args["language"] ?? "");
       const source = String(args["source"] ?? "");
       if (!source.trim()) return "error: source is required.";
+      // SECURITY: local code execution requires explicit opt-in via env var.
+      // This prevents accidental local execution on production servers where
+      // E2B cloud sandbox should be used instead.
+      if (process.env["ALLOW_LOCAL_CODE_EXEC"] !== "true") {
+        return "error: no code execution sandbox is available. E2B cloud sandbox is not configured (set E2B_API_KEY) and local code execution is disabled (set ALLOW_LOCAL_CODE_EXEC=true to enable, ONLY in isolated/trusted environments).";
+      }
       return runSandboxed(language, source);
     },
   },

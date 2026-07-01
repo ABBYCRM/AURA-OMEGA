@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
@@ -126,6 +126,38 @@ app.get("/_debug/env", requireOperator, async (_req, res) => {
   }
   res.json({ env: result, nvidiaKeyCount: keyCount, keyError, timestamp: new Date().toISOString() });
 });
+
+// ─── Simple in-memory rate limiter ───────────────────────────────────────────
+// Prevents abuse of expensive LLM endpoints. Per-IP sliding window.
+// NOT a substitute for a proper reverse-proxy rate limiter (nginx/Cloudflare)
+// but catches basic hammering. Cleans up stale entries lazily.
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 30; // 30 requests per minute per IP
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimitMiddleware(req: Request, res: Response, next: NextFunction): void {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    // New window or expired window
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    next();
+    return;
+  }
+
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    res.status(429).json({ error: "Rate limit exceeded. Please slow down.", retryAfter: Math.ceil((entry.resetAt - now) / 1000) });
+    return;
+  }
+  next();
+}
+
+// Apply rate limiting to expensive LLM endpoints (before the router)
+app.use("/api/ai/chat", rateLimitMiddleware);
+app.use("/api/ai/complete", rateLimitMiddleware);
 
 app.use("/api", router);
 

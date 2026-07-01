@@ -7,6 +7,27 @@ branch is created, it gets its own dated section here.
 
 ---
 
+## 2026-07-02 — branch `2026-07-02/production-hardening-kimi-workers`
+
+### Production Hardening — 6 critical fixes, 3 Kimi-style Workers
+
+#### Critical Fixes (operator audit 2026-07-02)
+- **Timeout all outbound fetch() calls** — tavilySearch and exaSearch now have 15s `AbortSignal.timeout()` (was hanging indefinitely). All other integrations already had timeouts, verified complete.
+- **NVIDIA key cache** — `nvidiaKeys()` rebuilds from env vars at most once per 60s (was every call, parsing up to 34 env vars each time). Dead key marking invalidates cache immediately.
+- **timingSafeStrEqual fixed** — removed broken HMAC-with-random-salt layer. Now uses direct `timingSafeEqual` on equal-length padded buffers. Returns false correctly on length mismatches.
+- **AUTH_USERS cached** — 30-second TTL cache on `getConfiguredUsers()` (was re-parsing on every protected API request). Cache invalidation export for tests.
+- **Local code_exec gated** — requires `ALLOW_LOCAL_CODE_EXEC=true` env var (was silently falling back to local `spawn` when E2B unavailable). Returns explicit error guiding to E2B config.
+- **Node.js memory limits** — `--max-old-space-size=512` on all JS sandbox executions (was unbounded).
+- **DB-seeded message dedupe** — `postedMessageKeys` Set is pre-populated from last 200 DB messages on startup so dedupe survives restarts. LRU eviction at 10K entries.
+- **Express rate limiting** — 30 req/min/IP on `/api/ai/chat` and `/api/ai/complete` (was unlimited).
+
+#### Kimi-Style Workers (new)
+- `kimi-agent` — Task planning + step-by-step execution with confidence scoring
+- `kimi-search` — Web search (Serper/Bing) + page reading (Jina) + synthesis
+- `kimi-reasoner` — Deep multi-step reasoning with self-correction + branch exploration
+
+---
+
 ## 2026-07-02 — branch `2026-07-02/cloudflare-workers-ai-integration`
 
 ### Cloudflare Workers AI integrated as Tier 0 LLM provider

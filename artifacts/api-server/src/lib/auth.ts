@@ -59,9 +59,13 @@ interface AuthUser {
 }
 
 /** Parse `AUTH_USERS` (`username:password:Display Name;...`) plus the legacy
- *  single-password fallback. Re-read on every call — never cached — so a
- *  Render env var change takes effect without a restart. */
+ *  single-password fallback. Cached for AUTH_USERS_CACHE_TTL ms so env var
+ *  changes take effect without a restart, but parsing overhead is amortised. */
 function getConfiguredUsers(): AuthUser[] {
+  const now = Date.now();
+  if (cachedUsers && now - cachedUsersAt < AUTH_USERS_CACHE_TTL) {
+    return cachedUsers;
+  }
   const users: AuthUser[] = [];
   const raw = process.env["AUTH_USERS"];
   if (raw) {
@@ -81,6 +85,8 @@ function getConfiguredUsers(): AuthUser[] {
   if (legacy && !users.some((u) => u.username === "operator")) {
     users.push({ username: "operator", password: legacy, displayName: "Operator" });
   }
+  cachedUsers = users;
+  cachedUsersAt = now;
   return users;
 }
 
@@ -108,17 +114,35 @@ export function displayNameFor(username: string): string {
 }
 
 /**
- * Constant-time string comparison. Hashes both inputs to a fixed 32-byte digest
- * first, so neither length nor content leaks via timing (timingSafeEqual throws
- * on length mismatch, and a raw length check is itself a side channel). Use for
- * any secret/token/api-key comparison.
+ * Constant-time string comparison. Pads both inputs to the same length to
+ * prevent length-leak timing attacks, then uses Node.js timingSafeEqual.
+ * Returns true only if both strings are identical in content and length.
  */
 export function timingSafeStrEqual(a: string, b: string): boolean {
-  const ha = createHmac("sha256", TIMING_SALT).update(a).digest();
-  const hb = createHmac("sha256", TIMING_SALT).update(b).digest();
-  return timingSafeEqual(ha, hb);
+  // Encode both strings as UTF-8 buffers
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  // Use the MAX length as the padding target — timing leaks the MAX of the
+  // two lengths but NOT which is longer (both are padded to the same size)
+  const maxLen = Math.max(bufA.length, bufB.length);
+  // Pad both to maxLen with zeros — timingSafeEqual requires equal length
+  const paddedA = Buffer.alloc(maxLen);
+  const paddedB = Buffer.alloc(maxLen);
+  bufA.copy(paddedA);
+  bufB.copy(paddedB);
+  return timingSafeEqual(paddedA, paddedB) && bufA.length === bufB.length;
 }
-const TIMING_SALT = randomBytes(32);
+
+// Simple TTL cache for configured users — env vars change rarely
+let cachedUsers: AuthUser[] | null = null;
+let cachedUsersAt = 0;
+const AUTH_USERS_CACHE_TTL = 30_000; // 30 seconds
+
+/** Invalidate the AUTH_USERS cache. Call after env var changes. */
+export function invalidateAuthUsersCache(): void {
+  cachedUsers = null;
+  cachedUsersAt = 0;
+}
 
 /** Mint a signed session token for `username` that expires after SESSION_TTL_SECONDS. */
 export function issueSessionToken(username: string): string {

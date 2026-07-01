@@ -43,6 +43,13 @@ const NVIDIA_BASE_DEFAULT = "https://integrate.api.nvidia.com/v1";
  */
 export function nvidiaKeys(): string[] {
   sweepDeadKeys();
+
+  // Return cached list if still fresh (filter out any keys marked dead since cache)
+  if (cachedNvidiaKeys && Date.now() - nvidiaKeysCacheTime < NVIDIA_KEYS_CACHE_TTL) {
+    const alive = cachedNvidiaKeys.filter((k) => !DEAD_KEYS.has(k));
+    return alive;
+  }
+
   // Operator debug 2026-06-27 20:58: log every call so we can correlate
   // "0 keys at synthesis time" with "18 keys at debug-endpoint time".
   const debugSample: string[] = [];
@@ -66,6 +73,10 @@ export function nvidiaKeys(): string[] {
   add(process.env["NVIDIA_API_KEYS"]);
   for (let i = 2; i <= 32; i++) add(process.env[`NVIDIA_API_KEY_${i}`]);
   logger.warn({ outLen: out.length, dead: DEAD_KEYS.size }, "nvidiaKeys result");
+
+  // Cache the rebuilt list
+  cachedNvidiaKeys = [...out];
+  nvidiaKeysCacheTime = Date.now();
   return out;
 }
 
@@ -118,8 +129,20 @@ function sweepDeadKeys() {
   DEAD_KEYS.clear();
   lastDeadKeySweep = Date.now();
 }
+
+// Cached key list — rebuilds at most once per minute
+let cachedNvidiaKeys: string[] | null = null;
+let nvidiaKeysCacheTime = 0;
+const NVIDIA_KEYS_CACHE_TTL = 60_000; // 60 seconds
+
+/** Invalidate the cached NVIDIA key list so the next call rebuilds it. */
+export function invalidateNvidiaKeyCache(): void {
+  cachedNvidiaKeys = null;
+}
+
 export function markNvidiaKeyDead(key: string) {
   DEAD_KEYS.add(key);
+  invalidateNvidiaKeyCache();
 }
 // Seed the cursor with a random offset at module load so simultaneous requests
 // at process boot don't all land on the same first key (which would burn that
@@ -304,6 +327,7 @@ export async function tavilySearch(query: string, limit: number): Promise<string
       search_depth: "basic",
       include_answer: false,
     }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!r.ok) throw new Error(`Tavily ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const data = (await r.json()) as {
@@ -332,6 +356,7 @@ export async function exaSearch(query: string, limit: number): Promise<string> {
       type: "auto",
       contents: { text: { maxCharacters: 600 } },
     }),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!r.ok) throw new Error(`Exa ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const data = (await r.json()) as {

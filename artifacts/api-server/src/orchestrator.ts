@@ -22,7 +22,7 @@ import {
   monologueLinesTable,
   agentCommandsTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import {
   AGENT_PERSONAS,
@@ -74,7 +74,18 @@ installFinalAnswerCrashGuard();
 // Operator-visible channel messages get keyed by (channelId, agentId/agentName,
 // messageType, content-hash). A second call with the same key in this process
 // returns without inserting a duplicate row.
+//
+// FAST-PATH: in-memory Set (survives this process only).
+// SLOW-PATH (restart survival): Set is seeded from the last 200 DB messages on
+// startup via seedMessageKeysFromDb() below.
+//
+// LIMITATION: dedupe doesn't 100% survive process restarts between the restart
+// and the seed completing. A DB-level UNIQUE constraint on (channelId, contentHash,
+// createdAt) would be the robust fix — requires a migration.
+const MAX_MESSAGE_KEYS = 10_000;
 const postedMessageKeys = new Set<string>();
+const messageKeysQueue: string[] = []; // LRU insertion order for eviction
+
 function stableMessageKey(opts: {
   channelId: number;
   agentId?: number | null;
@@ -85,6 +96,34 @@ function stableMessageKey(opts: {
   const agentPart = opts.agentId != null ? `id:${opts.agentId}` : `name:${(opts.agentName ?? "").trim().toLowerCase()}`;
   return `${opts.channelId}|${agentPart}|${opts.messageType}|${canonicalJson({ c: opts.content })}`;
 }
+
+/** Seed postedMessageKeys from recent DB history so dedupe survives restarts. */
+async function seedMessageKeysFromDb(): Promise<void> {
+  try {
+    const rows = await db
+      .select({ channelId: messagesTable.channelId, content: messagesTable.content, messageType: messagesTable.messageType })
+      .from(messagesTable)
+      .orderBy(desc(messagesTable.id))
+      .limit(200);
+    for (const row of rows) {
+      const key = stableMessageKey({ channelId: row.channelId, messageType: row.messageType, content: row.content });
+      postedMessageKeys.add(key);
+      messageKeysQueue.push(key);
+    }
+    // Trim if the DB returned more unique keys than our max (unlikely with 200 rows,
+    // but keeps the invariant that postedMessageKeys.size <= MAX_MESSAGE_KEYS).
+    while (postedMessageKeys.size > MAX_MESSAGE_KEYS && messageKeysQueue.length > 0) {
+      const oldest = messageKeysQueue.shift()!;
+      postedMessageKeys.delete(oldest);
+    }
+    logger.info({ count: postedMessageKeys.size }, "seedMessageKeysFromDb: seeded dedupe set from DB history");
+  } catch (err) {
+    logger.warn({ err }, "seedMessageKeysFromDb: failed to seed from DB (non-fatal)");
+  }
+}
+
+// Seed from DB on startup so dedupe survives restarts
+seedMessageKeysFromDb().catch(() => {});
 
 // ─── Vague-goal clarification gate ─────────────────────────────────────────────
 // Single source of truth for "this goal needs operator input, not swarm work".
@@ -327,7 +366,13 @@ async function postMessage(opts: {
     logger.debug({ key, messageType: opts.messageType }, "postMessage dedupe hit");
     return;
   }
+  // LRU eviction: keep the Set bounded so it doesn't grow unbounded over days
+  if (postedMessageKeys.size >= MAX_MESSAGE_KEYS && messageKeysQueue.length > 0) {
+    const oldest = messageKeysQueue.shift()!;
+    postedMessageKeys.delete(oldest);
+  }
   postedMessageKeys.add(key);
+  messageKeysQueue.push(key);
   // Evidence gate (operator directive 2026-06-27 18:46): never persist raw
   // tool-call markup or malformed JSON to the operator chat stream. If the
   // upstream assistant output leaked provider tool tokens, log + drop the
