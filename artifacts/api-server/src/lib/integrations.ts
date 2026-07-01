@@ -137,6 +137,58 @@ export function nvidiaConfigured(): boolean {
   return nvidiaKeys().length > 0;
 }
 
+// ─── Cloudflare Workers AI (Tier 0 LLM provider) ────────────────────────────
+// Cloudflare Workers AI offers free-tier inference on popular open models
+// (Llama, Mistral, DeepSeek) via a REST API. When CF_WORKERS_AI_PRIMARY=true,
+// it sits above NVIDIA NIM in the provider priority stack — giving the operator
+// a zero-cost, high-availability LLM option.
+// Docs: https://developers.cloudflare.com/workers-ai/get-started/rest-api/
+
+export function cfWorkersConfigured(): boolean {
+  return !!process.env["CF_WORKERS_AI_TOKEN"] && !!process.env["CF_WORKERS_ACCOUNT_ID"];
+}
+
+export function cfWorkersPrimary(): boolean {
+  return process.env["CF_WORKERS_AI_PRIMARY"] === "true" && cfWorkersConfigured();
+}
+
+export function cfWorkersAccountId(): string {
+  return process.env["CF_WORKERS_ACCOUNT_ID"] ?? "";
+}
+
+export function cfWorkersToken(): string {
+  return process.env["CF_WORKERS_AI_TOKEN"] ?? "";
+}
+
+/** Build a Cloudflare Workers AI run URL for a specific model. */
+export function cfWorkersFetchUrl(model: string): string {
+  const accountId = cfWorkersAccountId();
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
+}
+
+/** Normalize a model slug to CF Workers format. */
+export function normalizeCfWorkersModel(model: string): string {
+  // Already in CF format
+  if (model.startsWith("@cf/")) return model;
+  // Map common shorthand names
+  const map: Record<string, string> = {
+    "llama-3.1-8b": "@cf/meta/llama-3.1-8b-instruct",
+    "llama-3.1-70b": "@cf/meta/llama-3.1-70b-instruct",
+    "llama-3.3-70b": "@cf/meta/llama-3.3-70b-instruct",
+    "mistral-7b": "@cf/mistral/mistral-7b-instruct-v0.2",
+    "deepseek-r1-qwen": "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+  };
+  return map[model] || "@cf/meta/llama-3.1-8b-instruct";
+}
+
+/** Build CF Workers AI auth headers. */
+export function cfWorkersHeaders(): Record<string, string> {
+  return {
+    "Authorization": `Bearer ${cfWorkersToken()}`,
+    "Content-Type": "application/json",
+  };
+}
+
 // ─── Helicone (observability proxy) ─────────────────────────────────────────
 // Helicone sits transparently in front of NVIDIA NIM: same OpenAI-compatible
 // API, but every request is logged for observability. When no Helicone key
@@ -1099,6 +1151,7 @@ export function integrationStatus(): IntegrationStatus[] {
   const has = (k: string) => !!process.env[k];
   return [
     { key: "nvidia", name: `NVIDIA NIM (${nvidiaKeys().length} key${nvidiaKeys().length === 1 ? "" : "s"})`, category: "llm", envVar: "NVIDIA_API_KEY", configured: nvidiaConfigured() },
+    { key: "cf-workers-ai", name: `Cloudflare Workers AI${cfWorkersPrimary() ? " (PRIMARY)" : ""}`, category: "llm", envVar: "CF_WORKERS_AI_TOKEN", configured: cfWorkersConfigured() },
     { key: "kimi", name: `Kimi.com (Moonshot) — ${kimiPrimary() ? "PRIMARY" : "fallback"}`, category: "llm", envVar: "KIMI_API_KEY", configured: kimiApiConfigured() },
     { key: "scrapingbee", name: "ScrapingBee Residential Proxy", category: "scraping", envVar: "SCRAPINGBEE_API_KEY", configured: has("SCRAPINGBEE_API_KEY") },
     { key: "scrapfly", name: "ScrapFly", category: "scraping", envVar: "SCRAPFLY_API_KEY", configured: has("SCRAPFLY_API_KEY") },

@@ -7,6 +7,23 @@ branch is created, it gets its own dated section here.
 
 ---
 
+## 2026-07-02 — branch `2026-07-02/cloudflare-workers-ai-integration`
+
+### Cloudflare Workers AI integrated as Tier 0 LLM provider
+- **New provider priority stack** (when `CF_WORKERS_AI_PRIMARY=true`):
+  1. Cloudflare Workers AI (free tier — Llama 3.1/3.3, Mistral 7B, DeepSeek R1)
+  2. NVIDIA NIM (fallback)
+  3. llama-3.1-70b-instruct (NVIDIA fallback model)
+  4. Kimi.com (tertiary)
+- **Models available**: `@cf/meta/llama-3.1-8b-instruct`, `@cf/meta/llama-3.1-70b-instruct`,
+  `@cf/meta/llama-3.3-70b-instruct`, `@cf/mistral/mistral-7b-instruct-v0.2`,
+  `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`
+- **Streaming + non-streaming** both supported via CF Workers AI REST API
+- **Integration status** surfaced in `/api/integrations` and Settings panel
+- **Env vars**: `CF_WORKERS_AI_TOKEN`, `CF_WORKERS_ACCOUNT_ID`, `CF_WORKERS_AI_PRIMARY`
+
+---
+
 ## 2026-06-07 — branch `claude/clever-allen-cEtpo`
 
 ### Third-party integrations wired (env-driven, no hardcoded secrets)

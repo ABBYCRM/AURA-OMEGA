@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel } from "../lib/integrations";
+import { llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel, cfWorkersConfigured, cfWorkersPrimary, cfWorkersFetchUrl, cfWorkersHeaders, normalizeCfWorkersModel } from "../lib/integrations";
 import { extractAndStoreUserFacts, getUserProfile } from "../lib/userMemory";
 import { getScratchpad } from "./scratchpad";
 import { listSecretNames } from "../lib/vault";
@@ -312,27 +312,46 @@ export function openrouterHeaders() {
   return llmHeaders();
 }
 
-// List available models — NVIDIA NIM when configured, else OpenRouter
+// List available models — Cloudflare Workers AI (primary) → NVIDIA NIM → OpenRouter
 router.get("/ai/models", async (req, res) => {
   try {
-    if (nvidiaConfigured()) {
-      // NVIDIA NIM free-tier models the swarm uses
-      // Default: moonshotai/kimi-k2.6 (highest capability, 1M context).
-      // Set ABBY_MODEL env var to "meta/llama-3.1-70b-instruct" for max reliability.
-      const models = [
-        { id: "moonshotai/kimi-k2", name: "Kimi K2 (default)", context_length: 131072 },
-        { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct", context_length: 131072 },
-        { id: "meta/llama-3.1-70b-instruct", name: "Llama 3.1 70B Instruct (fallback)", context_length: 131072 },
-        { id: "meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B Instruct", context_length: 131072 },
-        { id: "qwen/qwen2.5-72b-instruct", name: "Qwen 2.5 72B Instruct", context_length: 131072 },
-        { id: "qwen/qwen2.5-coder-32b-instruct", name: "Qwen 2.5 Coder 32B", context_length: 131072 },
-        { id: "mistralai/mistral-small-3.1-24b-instruct", name: "Mistral Small 3.1 24B", context_length: 131072 },
-        { id: "meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B", context_length: 131072 },
-        { id: "meta/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick 17B", context_length: 131072 },
+    const models: Array<{ id: string; name: string; context_length: number; provider: string }> = [];
+    let primary = "none";
+
+    if (cfWorkersConfigured()) {
+      const cfModels = [
+        { id: "@cf/meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B (CF Workers)", context_length: 8192 },
+        { id: "@cf/meta/llama-3.1-70b-instruct", name: "Llama 3.1 70B (CF Workers)", context_length: 131072 },
+        { id: "@cf/meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B (CF Workers — default)", context_length: 131072 },
+        { id: "@cf/mistral/mistral-7b-instruct-v0.2", name: "Mistral 7B (CF Workers)", context_length: 32768 },
+        { id: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b", name: "DeepSeek R1 Qwen 32B (CF Workers)", context_length: 131072 },
       ];
-      res.json({ models, provider: "nvidia" });
+      models.push(...cfModels.map(m => ({ ...m, provider: "cf-workers-ai" as string })));
+      if (cfWorkersPrimary()) primary = "cf-workers-ai";
+    }
+
+    if (nvidiaConfigured()) {
+      const nvidiaModels = [
+        { id: "moonshotai/kimi-k2", name: "Kimi K2 (NVIDIA)", context_length: 131072 },
+        { id: "meta/llama-3.3-70b-instruct", name: "Llama 3.3 70B Instruct (NVIDIA)", context_length: 131072 },
+        { id: "meta/llama-3.1-70b-instruct", name: "Llama 3.1 70B Instruct (NVIDIA fallback)", context_length: 131072 },
+        { id: "meta/llama-3.1-8b-instruct", name: "Llama 3.1 8B Instruct (NVIDIA)", context_length: 131072 },
+        { id: "qwen/qwen2.5-72b-instruct", name: "Qwen 2.5 72B Instruct (NVIDIA)", context_length: 131072 },
+        { id: "qwen/qwen2.5-coder-32b-instruct", name: "Qwen 2.5 Coder 32B (NVIDIA)", context_length: 131072 },
+        { id: "mistralai/mistral-small-3.1-24b-instruct", name: "Mistral Small 3.1 24B (NVIDIA)", context_length: 131072 },
+        { id: "meta/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout 17B (NVIDIA)", context_length: 131072 },
+        { id: "meta/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick 17B (NVIDIA)", context_length: 131072 },
+      ];
+      models.push(...nvidiaModels.map(m => ({ ...m, provider: "nvidia" as string })));
+      if (primary === "none") primary = "nvidia";
+    }
+
+    if (models.length > 0) {
+      res.json({ models, primary, providers: [...new Set(models.map(m => m.provider))] });
       return;
     }
+
+    // Last resort: OpenRouter
     const r = await fetch(llmFetchUrl("/models"), { headers: openrouterHeaders() });
     const data = await r.json() as { data: { id: string; name: string; context_length: number }[] };
     const featured = [
@@ -341,8 +360,8 @@ router.get("/ai/models", async (req, res) => {
       "anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-5",
       "meta-llama/llama-4-maverick", "google/gemini-2.5-pro",
     ];
-    const models = (data.data ?? []).filter(m => featured.includes(m.id));
-    res.json({ models, provider: "openrouter" });
+    const openRouterModels = (data.data ?? []).filter(m => featured.includes(m.id)).map(m => ({ ...m, provider: "openrouter" as string }));
+    res.json({ models: openRouterModels, primary: "openrouter", providers: ["openrouter"] });
   } catch (err) {
     req.log.error({ err }, "Failed to fetch models");
     res.status(500).json({ error: "Failed to fetch models" });
@@ -761,6 +780,60 @@ router.post("/ai/chat", async (req, res) => {
     }
   }
 
+  // ── Cloudflare Workers AI (Tier 0) ─────────────────────────────────────────
+  // When CF_WORKERS_AI_PRIMARY=true AND CF Workers is configured, try it first.
+  // CF Workers returns an OpenAI-compatible response wrapped in { result: { choices: [...] } }.
+  // For streaming, it returns standard SSE events with choices[0].delta.content tokens.
+  if (cfWorkersConfigured()) {
+    try {
+      const cfModel = normalizeCfWorkersModel(model);
+      const cfBody = JSON.stringify({ messages: chatMessages, stream: true });
+      const cfRes = await fetch(cfWorkersFetchUrl(cfModel), {
+        method: "POST",
+        headers: cfWorkersHeaders(),
+        body: cfBody,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (cfRes.ok && cfRes.body) {
+        const cfReader = cfRes.body.getReader();
+        const cfDecoder = new TextDecoder();
+        let cfBuf = "";
+        let cfFullResponse = "";
+        while (true) {
+          const { done, value } = await cfReader.read();
+          if (done) break;
+          cfBuf += cfDecoder.decode(value, { stream: true });
+          const lines = cfBuf.split("\n");
+          cfBuf = lines.pop() ?? "";
+          for (const line of lines) {
+            const t = line.trim();
+            if (!t || t === "data: [DONE]") continue;
+            if (!t.startsWith("data: ")) continue;
+            try {
+              const parsed = JSON.parse(t.slice(6));
+              // CF Workers streaming format: { response: "token" }
+              const token = parsed.response ?? parsed.choices?.[0]?.delta?.content;
+              if (token) { cfFullResponse += token; sendEvent({ token }); }
+            } catch { /* skip */ }
+          }
+        }
+        if (cfFullResponse.trim()) {
+          await db.insert(messagesTable).values({
+            channelId, agentId: agent.id, agentName: agent.name, agentColor: agent.color,
+            content: cfFullResponse.trim(), messageType: "agent",
+            metadata: JSON.stringify({ model: cfModel, generatedBy: "cf-workers-ai" }),
+          });
+        }
+        sendEvent({ done: true, agentId: agent.id, agentName: agent.name, model: cfModel });
+        res.end(); return;
+      }
+      // CF failed — log and fall through to NVIDIA
+      req.log.warn({ status: cfRes.status, model: cfModel }, "CF Workers AI failed, falling through to NVIDIA");
+    } catch (cfErr) {
+      req.log.warn({ err: String(cfErr).slice(0, 200) }, "CF Workers AI threw, falling through to NVIDIA");
+    }
+  }
+
   try {
     const orRes = await fetch(llmRouteUrl("/chat/completions"), {
       method: "POST",
@@ -911,6 +984,30 @@ router.post("/ai/complete", async (req, res) => {
   ];
 
   try {
+    // Try Cloudflare Workers AI first (when configured)
+    if (cfWorkersConfigured()) {
+      try {
+        const cfModel = normalizeCfWorkersModel(model);
+        const cfRes = await fetch(cfWorkersFetchUrl(cfModel), {
+          method: "POST",
+          headers: cfWorkersHeaders(),
+          body: JSON.stringify({ messages, max_tokens: 512 }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (cfRes.ok) {
+          const cfData = await cfRes.json() as { result?: { choices?: Array<{ message?: { content?: string } }> }; success?: boolean };
+          const content = cfData.result?.choices?.[0]?.message?.content ?? "";
+          if (content) {
+            res.json({ content, model: cfModel, agentId: resolvedAgentId, provider: "cf-workers-ai" });
+            return;
+          }
+        }
+      } catch (cfErr) {
+        req.log.warn({ err: String(cfErr).slice(0, 200) }, "CF Workers AI /complete failed, falling through");
+      }
+    }
+
+    // Fall through to existing NVIDIA/OpenRouter path
     const r = await fetch(llmRouteUrl("/chat/completions"), {
       method: "POST",
       headers: openrouterHeaders(),
