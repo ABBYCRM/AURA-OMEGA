@@ -1,270 +1,238 @@
 import { Link, useLocation } from "wouter";
 import {
-  Diamond,
-  Plug,
+  LayoutDashboard,
   MessageSquare,
-  Plus,
-  ChevronDown,
-  Menu,
-  MessageSquarePlus,
-  Sparkles,
-  Loader2,
-  Scan,
-  PenTool,
-  Hash,
-  Share2,
-  Send,
+  Bot,
+  Workflow,
   Settings,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Sparkles,
+  Cpu,
+  Globe,
+  Mail,
+  Database,
+  Code2,
+  Camera,
+  MessageCircle,
+  GitBranch,
+  Shield,
+  ScrollText,
+  Search,
+  PanelLeftClose,
+  PanelLeftOpen,
   LogOut,
   User,
-  Zap,
-  Globe,
-  Brain,
-  Layers,
-  Terminal,
-  Calendar,
-  Clock,
-  ChevronRight,
-  MoreHorizontal,
+  Menu,
   X,
+  Loader2,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
-import { useAuth } from "@/hooks/use-auth";
+import { useState, useEffect } from "react";
+import { useGetAuthStatus, useLogout } from "@workspace/api-client-react";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 
 interface AppLayoutProps {
   children: React.ReactNode;
 }
 
-interface TaskItem {
-  id: string;
-  title: string;
-  active?: boolean;
-  icon?: React.ReactNode;
-}
-
-interface SectionProps {
-  title: string;
-  items: TaskItem[];
-  defaultOpen?: boolean;
-}
-
-function SidebarSection({ title, items, defaultOpen = true }: SectionProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-
-  return (
-    <div className="mb-2">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors w-full"
-      >
-        <ChevronDown className={cn("w-3 h-3 transition-transform", !isOpen && "-rotate-90")} />
-        {title}
-      </button>
-      {isOpen && (
-        <div className="space-y-0.5 mt-1">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-all group",
-                item.active
-                  ? "bg-white/10 text-white"
-                  : "text-gray-400 hover:bg-white/5 hover:text-white"
-              )}
-            >
-              {item.icon && <span className="text-gray-500 group-hover:text-gray-300">{item.icon}</span>}
-              <span className="flex-1 truncate">{item.title}</span>
-              {item.active && <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+const navSections = [
+  {
+    title: "WORKSPACE",
+    items: [
+      { href: "/", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
+      { href: "/chat", label: "Agent Chat", icon: <MessageSquare size={18} /> },
+      { href: "/agents", label: "Agents", icon: <Bot size={18} /> },
+      { href: "/tasks", label: "Tasks", icon: <Workflow size={18} /> },
+    ],
+  },
+  {
+    title: "TOOLS",
+    items: [
+      { href: "/swarm", label: "Swarm Canvas", icon: <Cpu size={18} /> },
+      { href: "/tools", label: "Tool Matrix", icon: <Search size={18} /> },
+      { href: "/integrations", label: "Integrations", icon: <Globe size={18} /> },
+      { href: "/missions", label: "Missions", icon: <GitBranch size={18} /> },
+      { href: "/settings", label: "Settings", icon: <Settings size={18} /> },
+    ],
+  },
+];
 
 export default function AppLayout({ children }: AppLayoutProps) {
   const [location] = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isMobile = useIsMobile();
-  const { user, logoutMutation } = useAuth();
-  const queryClient = useQueryClient();
+  const { data: authData } = useGetAuthStatus();
+  const user = authData?.user;
+  const logoutMutation = useLogout();
+  const [collapsed, setCollapsed] = useState(isMobile ? false : true);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<string[]>(["WORKSPACE", "TOOLS"]);
 
   useEffect(() => {
-    if (isMobile) {
-      setSidebarOpen(false);
-    }
+    if (isMobile) setCollapsed(true);
   }, [isMobile]);
 
-  const handleLogout = () => {
-    logoutMutation.mutate(undefined, {
-      onSuccess: () => {
-        queryClient.clear();
-        toast.success("Logged out successfully");
-      },
-    });
+  const toggleSection = (title: string) => {
+    setExpandedSections(prev => prev.includes(title) ? prev.filter(t => t !== title) : [...prev, title]);
   };
 
-  const todayTasks: TaskItem[] = [
-    { id: "1", title: "API Key Pricing Guide", active: true },
-  ];
+  const handleLogout = () => logoutMutation.mutate();
 
-  const previousTasks: TaskItem[] = [
-    { id: "2", title: "Dollar Lead Connect" },
-    { id: "3", title: "Interactive courtroom visualization" },
-    { id: "4", title: "Minimax M3 Hallucination Guide" },
-    { id: "5", title: "Medical Records Access Systems" },
-  ];
-
-  const navItems = [
-    { icon: <Diamond className="w-4 h-4" />, label: "Skills", href: "/skills" },
-    { icon: <Plug className="w-4 h-4" />, label: "Connectors", href: "/connectors" },
-    { icon: <MessageSquare className="w-4 h-4" />, label: "Instructions", href: "/instructions" },
-  ];
+  const sidebarWidth = collapsed ? "w-[68px]" : "w-[260px]";
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-[#1a1a1a] border-r border-white/5">
+    <aside className={cn("flex flex-col h-full bg-[hsl(0_0%_6%)] border-r border-[hsl(0_0%_14%)] transition-all duration-300", sidebarWidth)}>
       {/* Header */}
-      <div className="p-4 flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center shadow-lg shadow-orange-500/20">
-          <span className="text-white font-bold text-sm">A</span>
-        </div>
-        <span className="font-semibold text-white text-sm tracking-tight">AURA-OMEGA</span>
-        <button 
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="ml-auto p-1.5 hover:bg-white/5 rounded-lg text-gray-500 hover:text-white transition-colors"
-        >
-          <ChevronRight className={cn("w-4 h-4 transition-transform", !sidebarOpen && "rotate-180")} />
-        </button>
-      </div>
-
-      {/* Work Section */}
-      <div className="px-3 py-2">
-        <button className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
-          <span className="font-medium">Work</span>
-          <ChevronDown className="w-3 h-3" />
-        </button>
-      </div>
-
-      {/* Nav Items */}
-      <nav className="px-2 space-y-0.5">
-        {navItems.map((item) => (
-          <Link key={item.href} href={item.href}>
-            <div className={cn(
-              "flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-all",
-              location === item.href
-                ? "bg-white/10 text-white"
-                : "text-gray-400 hover:bg-white/5 hover:text-white"
-            )}>
-              {item.icon}
-              <span>{item.label}</span>
+      <div className="flex items-center justify-between px-3 h-14 border-b border-[hsl(0_0%_14%)] shrink-0">
+        {isMobile && (
+          <button onClick={() => setMobileOpen(false)} className="p-1.5 rounded-md text-[hsl(0_0%_45%)] hover:text-white hover:bg-[hsl(0_0%_14%)] mr-2">
+            <X size={16} />
+          </button>
+        )}
+        <div className={cn("flex items-center gap-2.5 overflow-hidden", collapsed && !isMobile && "justify-center w-full")}>
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shrink-0 shadow-lg shadow-orange-500/20">
+            <Sparkles size={16} className="text-white" />
+          </div>
+          {!collapsed && (
+            <div>
+              <h1 className="text-sm font-bold tracking-tight text-white whitespace-nowrap">AURA-OMEGA</h1>
+              <p className="text-[10px] text-[hsl(0_0%_45%)] -mt-0.5 whitespace-nowrap">Multi-Agent System</p>
             </div>
-          </Link>
-        ))}
-      </nav>
-
-      {/* Projects */}
-      <div className="mt-4 px-3">
-        <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">Projects</h3>
-        <button className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors py-1">
-          <Plus className="w-4 h-4" />
-          <span>New Project</span>
-        </button>
-      </div>
-
-      {/* Scrollable Task Sections */}
-      <div className="flex-1 overflow-y-auto px-2 mt-2">
-        <SidebarSection title="Today" items={todayTasks} />
-        <SidebarSection title="Previous 7 days" items={previousTasks} defaultOpen={true} />
+          )}
+        </div>
+        {!isMobile && !collapsed && (
+          <button onClick={() => setCollapsed(true)} className="p-1 rounded-md hover:bg-[hsl(0_0%_14%)] text-[hsl(0_0%_45%)] hover:text-white transition-colors">
+            <PanelLeftClose size={16} />
+          </button>
+        )}
+        {!isMobile && collapsed && (
+          <button onClick={() => setCollapsed(false)} className="absolute -right-3 top-14 w-6 h-6 rounded-full bg-[hsl(0_0%_12%)] border border-[hsl(0_0%_20%)] flex items-center justify-center text-[hsl(0_0%_45%)] hover:text-white z-10">
+            <PanelLeftOpen size={12} />
+          </button>
+        )}
       </div>
 
       {/* New Task Button */}
-      <div className="p-3">
-        <button className="w-full py-2.5 px-4 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-lg shadow-orange-500/20 hover:shadow-orange-500/30">
-          <Plus className="w-4 h-4" />
-          New Task
-        </button>
+      <div className={cn("px-3 pt-3 shrink-0", collapsed && "px-2")}>
+        <Link href="/chat">
+          <button className={cn(
+            "w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold shadow-lg shadow-orange-500/20 transition-all rounded-lg flex items-center justify-center gap-2",
+            collapsed ? "h-10 w-10 p-0 mx-auto" : "h-10 px-4"
+          )}>
+            <Plus size={18} />
+            {!collapsed && "New Task"}
+          </button>
+        </Link>
       </div>
 
-      {/* User */}
-      <div className="p-3 border-t border-white/5">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-3 w-full hover:bg-white/5 rounded-lg p-2 transition-colors">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center border border-white/10">
-                <span className="text-white text-xs font-medium">
-                  {user?.username?.slice(0, 2).toUpperCase() || "LL"}
-                </span>
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto no-scrollbar py-2 px-2 space-y-1">
+        {navSections.map((section) => (
+          <div key={section.title} className="mb-2">
+            {!collapsed && (
+              <button onClick={() => toggleSection(section.title)} className="w-full flex items-center justify-between px-2 py-1.5 text-[10px] font-semibold text-[hsl(0_0%_40%)] uppercase tracking-wider hover:text-[hsl(0_0%_60%)] transition-colors">
+                <span>{section.title}</span>
+                <ChevronLeft size={12} className={cn("transition-transform", expandedSections.includes(section.title) ? "rotate-90" : "-rotate-90")} />
+              </button>
+            )}
+            {(!collapsed ? expandedSections.includes(section.title) : true) && (
+              <div className="space-y-0.5">
+                {section.items.map((item) => {
+                  const isActive = location === item.href;
+                  return (
+                    <Link key={item.href} href={item.href}>
+                      <button
+                        onClick={() => isMobile && setMobileOpen(false)}
+                        className={cn(
+                          "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm transition-all duration-150 group relative",
+                          isActive
+                            ? "bg-[hsl(24_95%_53%/0.12)] text-orange-400 font-medium"
+                            : "text-[hsl(0_0%_60%)] hover:text-white hover:bg-[hsl(0_0%_12%)]",
+                          collapsed && "justify-center px-0"
+                        )}
+                      >
+                        <span className={cn("transition-colors", isActive ? "text-orange-400" : "text-[hsl(0_0%_40%)] group-hover:text-[hsl(0_0%_70%)]")}>
+                          {item.icon}
+                        </span>
+                        {!collapsed && <span className="flex-1 text-left truncate">{item.label}</span>}
+                        {isActive && !collapsed && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-orange-500 rounded-r-full" />}
+                      </button>
+                    </Link>
+                  );
+                })}
               </div>
-              <div className="flex-1 text-left">
-                <p className="text-sm font-medium text-white">{user?.username || "Luis Lacerda"}</p>
-                <p className="text-xs text-gray-500">Free</p>
-              </div>
-              <MoreHorizontal className="w-4 h-4 text-gray-500" />
+            )}
+          </div>
+        ))}
+      </nav>
+
+      {/* System Status Mini */}
+      {!collapsed && (
+        <div className="px-3 pb-2 shrink-0">
+          <div className="bg-[hsl(0_0%_9%)] rounded-lg p-2.5 border border-[hsl(0_0%_14%)]">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[10px] font-semibold text-[hsl(0_0%_40%)] uppercase tracking-wider">System</span>
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            </div>
+            <div className="text-xs text-green-400 font-medium mb-1">AURA Online</div>
+            <div className="text-[10px] text-[hsl(0_0%_40%)]">Multi-agent active</div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer - User */}
+      <div className="shrink-0 border-t border-[hsl(0_0%_14%)] p-3">
+        <div className={cn("flex items-center gap-2.5", collapsed && "justify-center")}>
+          <div className="relative shrink-0">
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center text-white text-xs font-bold">
+              {(user?.username || "AU").slice(0, 2).toUpperCase()}
+            </div>
+            <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-green-500 border-2 border-[hsl(0_0%_6%)]" />
+          </div>
+          {!collapsed && (
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium text-white truncate">{user?.username || "Admin"}</p>
+              <p className="text-[10px] text-[hsl(0_0%_40%)] truncate">Online</p>
+            </div>
+          )}
+          {!collapsed && (
+            <button onClick={handleLogout} className="p-1.5 rounded-md text-[hsl(0_0%_40%)] hover:text-red-400 hover:bg-[hsl(0_0%_14%)] transition-colors" title="Logout">
+              <LogOut size={14} />
             </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56 bg-[#252525] border-white/10">
-            <DropdownMenuItem className="text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer">
-              <User className="w-4 h-4 mr-2" />
-              Profile
-            </DropdownMenuItem>
-            <DropdownMenuItem className="text-gray-300 hover:text-white hover:bg-white/5 cursor-pointer">
-              <Settings className="w-4 h-4 mr-2" />
-              Settings
-            </DropdownMenuItem>
-            <DropdownMenuSeparator className="bg-white/10" />
-            <DropdownMenuItem 
-              onClick={handleLogout}
-              className="text-red-400 hover:text-red-300 hover:bg-white/5 cursor-pointer"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          )}
+        </div>
       </div>
-    </div>
+    </aside>
   );
 
   return (
-    <div className="flex h-screen bg-[#0d0d0d] text-white overflow-hidden">
-      {/* Desktop Sidebar */}
-      {!isMobile && (
-        <aside 
-          className={cn(
-            "transition-all duration-300 ease-in-out flex-shrink-0",
-            sidebarOpen ? "w-72" : "w-0 overflow-hidden"
-          )}
+    <div className="flex h-[100dvh] w-screen bg-[hsl(0_0%_5.5%)] text-white overflow-hidden">
+      {/* Mobile hamburger */}
+      {isMobile && (
+        <button
+          onClick={() => setMobileOpen(!mobileOpen)}
+          className="fixed top-3 left-3 z-50 w-9 h-9 rounded-lg bg-[hsl(0_0%_12%)] border border-[hsl(0_0%_18%)] flex items-center justify-center text-white shadow-lg"
         >
-          <SidebarContent />
-        </aside>
+          {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+        </button>
       )}
 
-      {/* Mobile Sidebar */}
-      {isMobile && (
-        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-          <SheetContent side="left" className="w-72 p-0 bg-[#1a1a1a] border-r border-white/5">
-            <SidebarContent />
-          </SheetContent>
-        </Sheet>
-      )}
+      {/* Mobile overlay */}
+      {mobileOpen && <div className="fixed inset-0 bg-black/60 z-30 lg:hidden" onClick={() => setMobileOpen(false)} />}
+
+      {/* Sidebar */}
+      <div className={cn(
+        "fixed lg:relative z-40 h-full transition-transform duration-300",
+        mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      )}>
+        <SidebarContent />
+      </div>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <main className="flex-1 min-w-0 h-full overflow-hidden">
         {children}
       </main>
     </div>
