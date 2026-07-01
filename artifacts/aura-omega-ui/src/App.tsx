@@ -30,8 +30,8 @@ function Router() {
   return (
     <AppLayout>
       <Switch>
-        {/* Default lands on Chat — the command surface. */}
-        <Route path="/" component={() => <Redirect to="/chat" />} />
+        {/* Default lands on Dashboard — the system overview. */}
+        <Route path="/" component={Dashboard} />
         <Route path="/chat" component={ChatPage} />
         {/* Hermes overview — the new "home" panel. */}
         <Route path="/hermes" component={HermesPage} />
