@@ -28,13 +28,20 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
     channelId: number;
     model?: string;
     attachmentIds?: number[];
-  }) => {
+  }): Promise<{ text: string; error: string | null; agentName: string | null }> => {
     // Cancel any in-flight stream
     abortRef.current?.abort();
     const abort = new AbortController();
     abortRef.current = abort;
 
     setState({ streaming: true, tokens: "", agentName: null, agentId: opts.agentId ?? null, model: null, error: null });
+
+    // Accumulate locally too: the caller awaits send() and needs the final text
+    // immediately. Reading `state.tokens` from the caller's closure right after
+    // await returns the stale (empty) value, so we return the result directly.
+    let full = "";
+    let agentName: string | null = null;
+    let error: string | null = null;
 
     try {
       const res = await fetch(resolveApiUrl("/api/ai/chat"), {
@@ -53,7 +60,7 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
       if (!res.ok || !res.body) {
         const errText = await res.text();
         setState(s => ({ ...s, streaming: false, error: errText }));
-        return;
+        return { text: "", error: errText || `Request failed (${res.status})`, agentName: null };
       }
 
       const reader = res.body.getReader();
@@ -74,9 +81,11 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
           try {
             const parsed = JSON.parse(trimmed.slice(6));
             if (parsed.token) {
+              full += parsed.token;
               setState(s => ({ ...s, tokens: s.tokens + parsed.token }));
             }
             if (parsed.done) {
+              agentName = parsed.agentName ?? agentName;
               setState(s => ({
                 ...s,
                 streaming: false,
@@ -87,6 +96,7 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
               onComplete?.(parsed.agentId ?? null);
             }
             if (parsed.error) {
+              error = parsed.error;
               setState(s => ({ ...s, streaming: false, error: parsed.error }));
             }
           } catch {
@@ -94,9 +104,13 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
           }
         }
       }
+      setState(s => ({ ...s, streaming: false }));
+      return { text: full, error, agentName };
     } catch (err: unknown) {
-      if ((err as Error)?.name === "AbortError") return;
-      setState(s => ({ ...s, streaming: false, error: String(err) }));
+      if ((err as Error)?.name === "AbortError") return { text: full, error: null, agentName };
+      const msg = String(err);
+      setState(s => ({ ...s, streaming: false, error: msg }));
+      return { text: full, error: msg, agentName };
     }
   }, [onComplete]);
 

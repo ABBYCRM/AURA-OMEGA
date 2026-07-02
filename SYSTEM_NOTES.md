@@ -116,6 +116,47 @@ If you're a future AI and the operator is still creating many fragmented channel
 - The 7 QA-audit bugs in the table above are **reported, not fixed** (user had not yet confirmed whether to fix them when this entry was written).
 - `NVIDIA_API_KEY` (and ideally a Kimi fallback key) needs to be set in Render — operator action, see above.
 - `scripts/qa-crawl.mjs` and `scripts/qa-interactions.mjs` are checked into `scripts/` for reuse; run them against a `vite preview` server on `localhost:4173` (see each file's `BASE` constant).
+## 2026-07-01 — Production recovery: env wiring, DB reconnect, and the broken-build fix
+
+**Type:** `[INFRA]` `[SECURITY-ADJACENT]`
+
+Operator was locked out of the live site and every mission failed. Three independent
+production faults, all fixed and verified end-to-end against the live service:
+
+### 1. Missing env vars (LLM outage + integrations dark)
+Render had only `AUTH_USERS` + `SESSION_SECRET`. Wired the full key set via the Render API
+(single atomic bulk merge, existing vars preserved): `NVIDIA_API_KEY` + `NVIDIA_API_KEYS`
+(11-key pool — all 11 probed live, 0 dead), `KIMI_API_KEY`, `OPENAI_API_KEY`/`EMBEDDINGS_API_KEY`,
+`STEEL`, `FIRECRAWL`, `SCRAPINGBEE`, `SCRAPFLY`, `SCREENSHOTONE_*`, `COMPOSIO`, `EXA`, `TAVILY`,
+`HELICONE`, `E2B`, `PINECONE`, `INNGEST_EVENT_KEY`, `RESEND_*`, `DISCORD_BOT_TOKEN`.
+`/_debug/env` now reports `nvidiaKeyCount: 11, keyError: none`.
+
+### 2. Database disconnected
+`DATABASE_URL` was unset → agents/channels/chat all 500'd even with a valid login. The
+`abby-lead-db` Postgres (Oregon) existed with all data intact. Wired its **internal**
+connection string (external errored `Connection terminated unexpectedly` — free-tier blocks
+external). `/health/db` → `ok, 5ms`. All prior channels/agents came back.
+
+### 3. Frontend build had been silently failing → stale bundle with a broken login
+`render-build.sh` rebuilds the UI, but the build had been failing for a while, so Render kept
+serving an old committed `dist`. That stale bundle never called `/api/auth/me` on mount and
+showed "Invalid username or password" even on a `200 {authenticated:true}`. Four accumulated
+source defects fixed (verified via Playwright against the live site + a pixel-compared
+screenshot of the rebuilt bundle):
+- `login.tsx`: `mutateAsync({username,password})` → `mutateAsync({ data: { username, password } })`
+  (generated `useLogin` expects the wrapped shape; flat dropped the credentials).
+- `settings.tsx:91`: stray `]` in a `className` ternary (hard syntax error).
+- `App.tsx`: `AppLayout` is a **default** export, was imported as named.
+- `index.css`: had been regressed to Tailwind **v3** `@tailwind` directives with no `@theme`,
+  which can't build under Tailwind v4 (`unknown utility bg-background`). Rewrote as v4
+  `@import "tailwindcss"` + an `@theme` block whose 14 color tokens exactly match the shipped
+  design (`#0e0e0e` bg, `#f97015` primary, …). Rebuilt + committed `dist`.
+
+**Verified live:** Playwright logged in as a real user and reached the System Dashboard
+(14/14 components green). If you rebuild the UI, it now actually compiles — keep it that way so
+Render stops serving stale bundles.
+
+**Note:** all keys were pasted into the chat by the operator in plaintext and should be rotated.
 
 ---
 

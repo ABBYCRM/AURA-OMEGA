@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { agentsTable, messagesTable, attachmentsTable } from "@workspace/db";
 import { eq, and, inArray, desc } from "drizzle-orm";
-import { llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel, cfWorkersConfigured, cfWorkersPrimary, cfWorkersFetchUrl, cfWorkersHeaders, normalizeCfWorkersModel } from "../lib/integrations";
+import { llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, heliconeHeaders, nvidiaConfigured, integrationStatus, normalizeModel, cfWorkersConfigured, cfWorkersPrimary, cfWorkersFetchUrl, cfWorkersHeaders, normalizeCfWorkersModel, kimiApiConfigured, kimiPrimary, kimiFetchUrl } from "../lib/integrations";
 import { extractAndStoreUserFacts, getUserProfile } from "../lib/userMemory";
 import { getScratchpad } from "./scratchpad";
 import { listSecretNames } from "../lib/vault";
@@ -837,16 +837,58 @@ router.post("/ai/chat", async (req, res) => {
   }
 
   try {
-    const orRes = await fetch(llmRouteUrl("/chat/completions"), {
-      method: "POST",
-      headers: openrouterHeaders(),
-      body: JSON.stringify({
-        model: normalizeModel(model),
-        stream: true,
-        messages: chatMessages,
-        max_tokens: 700,
-      }),
+    // Resilient LLM call. NVIDIA's free tier returns 429 under even light
+    // burst load (a few rapid messages). llmRouteUrl() and openrouterHeaders()
+    // rotate the relay IP + NVIDIA key on every call, so retrying with a short
+    // backoff naturally lands on a different key/IP. After NVIDIA is exhausted,
+    // fall back to Kimi if it is configured. Without this, one 429 made every
+    // chat reply come back empty ("Processing complete." on the client).
+    const streamBody = (m: string) => JSON.stringify({
+      model: normalizeModel(m),
+      stream: true,
+      messages: chatMessages,
+      max_tokens: 700,
     });
+    let orRes: Response | null = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        orRes = await fetch(llmRouteUrl("/chat/completions"), {
+          method: "POST",
+          headers: openrouterHeaders(),
+          body: streamBody(model),
+        });
+      } catch (fetchErr) {
+        req.log.warn({ attempt, err: String(fetchErr).slice(0, 120) }, "LLM stream fetch threw — rotating + retrying");
+        orRes = null;
+        await new Promise((r) => setTimeout(r, 400 + attempt * 400));
+        continue;
+      }
+      if (orRes.ok) break;
+      // 429 (rate limit) / 401 (key throttled) / 5xx (relay hiccup) → rotate key+relay and retry.
+      if ([429, 401, 500, 502, 503, 504].includes(orRes.status) && attempt < 4) {
+        req.log.warn({ attempt, status: orRes.status }, "LLM stream 429/5xx — rotating key+relay and retrying");
+        await new Promise((r) => setTimeout(r, 500 + attempt * 500));
+        continue;
+      }
+      break; // 404 / 402 / other → handled by the block below
+    }
+    // Kimi tertiary fallback (direct, no relay) when NVIDIA is exhausted.
+    if ((!orRes || !orRes.ok) && kimiApiConfigured() && !kimiPrimary()) {
+      req.log.warn("LLM: NVIDIA exhausted on chat stream — falling back to Kimi");
+      try {
+        const kRes = await fetch(kimiFetchUrl("/chat/completions"), {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${process.env["KIMI_API_KEY"]}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: process.env["KIMI_MODEL"] ?? "kimi-k2.6", stream: true, messages: chatMessages, max_tokens: 700 }),
+        });
+        if (kRes.ok) orRes = kRes;
+      } catch { /* fall through to error handling below */ }
+    }
+    if (!orRes) {
+      sendEvent({ error: "LLM temporarily unavailable (all providers rate-limited). Try again in a moment." });
+      sendEvent({ done: true });
+      res.end(); return;
+    }
 
     if (!orRes.ok) {
       const errText = await orRes.text();
@@ -895,7 +937,9 @@ router.post("/ai/chat", async (req, res) => {
       const hint =
         orRes.status === 402
           ? `LLM provider is out of credits. Check your NVIDIA_API_KEY balance.`
-          : `LLM error ${orRes.status}: ${errText.slice(0, 200)}`;
+          : orRes.status === 429
+            ? `The model pool is rate-limited right now (NVIDIA free tier). Give it a few seconds and send again.`
+            : `LLM error ${orRes.status}: ${errText.slice(0, 200)}`;
       sendEvent({ error: hint });
       sendEvent({ done: true });
       res.end(); return;

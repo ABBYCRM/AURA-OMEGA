@@ -28,7 +28,8 @@ function Router() {
   return (
     <AppLayout>
       <Switch>
-        {/* Default lands on Chat — the command surface. */}
+        {/* Default lands on Chat — the command surface (Claw design). The
+            dashboard stays reachable at /swarm and via the drawer. */}
         <Route path="/" component={() => <Redirect to="/chat" />} />
         <Route path="/chat" component={ChatPage} />
         {/* Hermes overview — the new "home" panel. */}
