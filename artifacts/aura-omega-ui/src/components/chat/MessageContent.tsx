@@ -69,6 +69,19 @@ const components: Components = {
   td: ({ children }) => <td className="border border-card-border px-2.5 py-1.5 align-top">{children}</td>,
   a: ({ href, children }) => {
     const raw = href ?? "";
+    // A generated video links to /api/uploads/<id> with a "▶ Play" label —
+    // render it as an inline player instead of a bare link so it shows on screen.
+    const isVideoLink = /\/api\/uploads\/\d+/.test(raw) && /▶|play\b/i.test(String(children));
+    if (isVideoLink) {
+      return (
+        <video
+          src={resolveHref(raw.replace(/[?&]download=1/, ""))}
+          controls
+          playsInline
+          className="my-2 max-h-80 max-w-full rounded-lg border border-card-border"
+        />
+      );
+    }
     const isDownload = /[?&]download=1/.test(raw) || /\/api\/uploads\//.test(raw);
     return (
       <a

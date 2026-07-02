@@ -551,14 +551,28 @@ router.post("/ai/chat", async (req, res) => {
     sendEvent({ token: ack });
     fullResponse += ack;
     try {
-      const result = await runTool(toolName, { prompt: message.trim() }, {
+      const raw = await runTool(toolName, { prompt: message.trim() }, {
         agentId: agent.id,
         agentName: agent.name,
         agentColor: agent.color,
         channelId,
       });
-      sendEvent({ token: result });
-      fullResponse += result;
+      // Emit a CLEAN result the chat can render inline, not the tool's verbose
+      // internal text. Images render as markdown ![](…); videos as an inline
+      // <video> tag (MessageContent renders /api/uploads video links) + a link.
+      const urlMatch = /\/api\/uploads\/\d+/.exec(raw);
+      let out: string;
+      if (urlMatch && !/^error/i.test(raw.trim())) {
+        const url = urlMatch[0];
+        const label = message.trim().slice(0, 80);
+        out = mode === "image"
+          ? `![${label}](${url})\n\n[⬇ Download image](${url}?download=1)`
+          : `Your video is ready:\n\n[▶ Play / download video](${url})`;
+      } else {
+        out = raw; // honest error text (e.g. "set A2E_API_KEY")
+      }
+      sendEvent({ token: out });
+      fullResponse += out;
     } catch (e) {
       const errText = `\n\nerror: ${mode} generation failed: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
       sendEvent({ token: errText });
