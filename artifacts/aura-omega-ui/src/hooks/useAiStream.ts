@@ -80,9 +80,13 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
           if (!trimmed.startsWith("data: ")) continue;
           try {
             const parsed = JSON.parse(trimmed.slice(6));
-            if (parsed.token) {
-              full += parsed.token;
-              setState(s => ({ ...s, tokens: s.tokens + parsed.token }));
+            // The server may emit a token as a JSON number (e.g. 0, 51), so
+            // guard on presence, not truthiness — `if (parsed.token)` would
+            // silently drop a token that is exactly the number 0.
+            if (parsed.token !== undefined && parsed.token !== null) {
+              const tok = String(parsed.token);
+              full += tok;
+              setState(s => ({ ...s, tokens: s.tokens + tok }));
             }
             if (parsed.done) {
               agentName = parsed.agentName ?? agentName;
