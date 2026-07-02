@@ -23,6 +23,20 @@ const RENDER_API = "https://api.render.com/v1";
 // Every env var the app understands. Pushed only when present locally; anything
 // not set locally keeps its current value on Render (never wiped).
 const MANAGED_KEYS = [
+  // ── LLM providers ──────────────────────────────────────────────────────
+  // KIMI_PRIMARY=true routes ALL chat through Kimi.com (Moonshot) instead of
+  // NVIDIA. KIMI_BASE_URL selects the endpoint (moonshot.ai international vs
+  // moonshot.cn). NVIDIA_API_KEYS is the comma-separated rotation pool.
+  "KIMI_PRIMARY",
+  "KIMI_API_KEY",
+  "KIMI_BASE_URL",
+  "KIMI_MODEL",
+  "NVIDIA_API_KEY",
+  "NVIDIA_API_KEYS",
+  "NVIDIA_BASE_URL",
+  "CF_WORKERS_AI_PRIMARY",
+  "CF_WORKERS_AI_TOKEN",
+  "CF_WORKERS_ACCOUNT_ID",
   "OPENROUTER_API_KEY",
   "STEEL_API_KEY",
   "FIRECRAWL_API_KEY",
