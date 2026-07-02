@@ -44,12 +44,9 @@ npx --yes pnpm@9 install --no-frozen-lockfile
 echo "=== Building lib packages ==="
 npx --yes pnpm@9 run typecheck:libs
 
-echo "=== Pushing DB schema ==="
-echo "DATABASE_URL is set: $([ -n "$DATABASE_URL" ] && echo 'YES' || echo 'NO')"
-echo "DATABASE_URL prefix: ${DATABASE_URL%%:*}"
-cd lib/db && npx drizzle-kit push --force 2>&1
-echo "DB push exit code: $?"
-cd ../..
+echo "=== DB schema push (non-blocking) ==="
+# DB push is best-effort; build env may not have DB access. Service startup handles init.
+cd lib/db && (npx drizzle-kit push --force 2>&1 || echo "WARNING: DB push skipped — will retry at runtime") && cd ../.. || cd ../..
 
 echo "=== Building API server ==="
 npx --yes pnpm@9 --filter @workspace/api-server run build
