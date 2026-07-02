@@ -67,7 +67,7 @@ router.post("/lookup", async (req: Request, res: Response) => {
       promptBlock: block,
     });
   } catch (err) {
-    req.status?.(500).json({ error: "lookup failed" });
+    res.status(500).json({ error: "lookup failed" });
   }
 });
 

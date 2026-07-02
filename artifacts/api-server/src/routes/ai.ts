@@ -641,6 +641,7 @@ router.post("/ai/chat", async (req, res) => {
             channelId,
             missionId: 0,
             payload: {
+              missionId: 0,
               phase: "decomposition",
               phasesRemaining: 2,
               totalSteps: steps.length,
@@ -730,6 +731,7 @@ router.post("/ai/chat", async (req, res) => {
                 channelId,
                 missionId: tempMissionId,
                 payload: {
+                  missionId: tempMissionId,
                   phase: "decomposition",
                   phasesRemaining: 2,
                   totalSteps: steps.length,

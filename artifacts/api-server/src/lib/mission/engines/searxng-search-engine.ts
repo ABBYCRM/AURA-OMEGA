@@ -20,7 +20,8 @@
  * Required env: ABBY_SEARCH_URL (e.g. https://abby-search.onrender.com)
  */
 
-import type { Engine, EngineResult, MissionStep } from "../types";
+import type { EngineAdapter, EngineResult } from "./registry";
+import type { MissionStep } from "../types";
 
 const logger = {
   warn: (...args: unknown[]) => console.warn("[searxng-search]", ...args),
@@ -81,12 +82,8 @@ function isProfileUrl(url: string): boolean {
   return /linkedin\.com\/in\//i.test(url) || /linkedin\.com\/profile\//i.test(url);
 }
 
-export const searxngSearchEngine: Engine = {
+export const searxngSearchEngine: EngineAdapter = {
   name: "searxng-search",
-  version: "1.0.0",
-  capabilities: ["search", "fallback", "free", "no-rate-limit"],
-  description:
-    "Self-hosted SearXNG metasearch. Free, multi-engine, no rate limits. Operator fallback #2 for auth-gated platforms. URL: ABBY_SEARCH_URL env var.",
   async run(step: MissionStep): Promise<EngineResult> {
     const started = Date.now();
 

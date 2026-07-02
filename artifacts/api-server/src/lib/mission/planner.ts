@@ -76,6 +76,7 @@ export function buildMissionSteps(goal: string, sourceContext?: string | null): 
           label: "BLOCKED",
           agent: "OMEGA",
           message: `Refused to dispatch — vague goal "${goal.trim()}".`,
+          timestamp: new Date().toISOString(),
         },
       ],
       activeInference: {
@@ -84,7 +85,15 @@ export function buildMissionSteps(goal: string, sourceContext?: string | null): 
         prior: "vague goals require operator input",
         prediction: "operator will provide specifics",
         predictionError: "0",
+        selectedPolicy: "CLARIFY",
+        ambiguity: 1,
+        risk: 0,
+        evidenceStrength: 0,
+        expectedFreeEnergy: 1,
       },
+      verified: false,
+      blocked: true,
+      failed: false,
     };
     return { steps: [], brain };
   }
@@ -175,28 +184,26 @@ export function buildMissionSteps(goal: string, sourceContext?: string | null): 
   // Operator's doctrine (2026-06-27): before synthesizing, inject the
   // Tier-0/1/2 authoritative docs relevant to the goal so K2.6 cites
   // primary sources instead of SEO blogs.
-  // Skip synthesis for ABORT (vague) missions — the clarification path handles
-  // those without needing a synthesis call.
-  if (brain.gate !== "ABORT") {
-    const docBlock = knowledgeHierarchyBlock(goal);
-    const tier0Count = relevantDocsForGoal(goal).length;
-    steps.push({
-      index: steps.length,
-      description: `Synthesize a coherent final answer for "${goal}" from all evidence collected by prior steps + Tier-0/1/2 docs (${tier0Count} authoritative source(s) matched).`,
-      engine: "brain",
-      action: "synthesize",
-      args: {
-        goal,
-        missionId: 0, // set at runtime by the executor
-        format: "structured",
-        includeAllEvidence: true,
-        authoritativeDocs: docBlock,
-      },
-      acceptance: "Final synthesized answer addresses the operator's question directly with cited sources, prefers Tier-0 official docs over community blogs.",
-      maxAttempts: 3,
-      backoffSeconds: 30,
-    });
-  }
+  // ABORT (vague) and HOLD missions never reach here — the early returns
+  // above handle them — so gate is always "GO" and synthesis always applies.
+  const docBlock = knowledgeHierarchyBlock(goal);
+  const tier0Count = relevantDocsForGoal(goal).length;
+  steps.push({
+    index: steps.length,
+    description: `Synthesize a coherent final answer for "${goal}" from all evidence collected by prior steps + Tier-0/1/2 docs (${tier0Count} authoritative source(s) matched).`,
+    engine: "brain",
+    action: "synthesize",
+    args: {
+      goal,
+      missionId: 0, // set at runtime by the executor
+      format: "structured",
+      includeAllEvidence: true,
+      authoritativeDocs: docBlock,
+    },
+    acceptance: "Final synthesized answer addresses the operator's question directly with cited sources, prefers Tier-0 official docs over community blogs.",
+    maxAttempts: 3,
+    backoffSeconds: 30,
+  });
 
   return { steps, brain };
 }

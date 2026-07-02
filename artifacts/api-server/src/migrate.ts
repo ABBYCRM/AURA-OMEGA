@@ -578,7 +578,10 @@ export async function runMigrations(): Promise<void> {
   // NOT throw out of here — that would propagate to index.ts, hit process.exit(1),
   // and prevent the server from ever listening, pinning Render to the stale
   // last-good build. Boot must always succeed; the DB simply migrates later.
-  let client: Awaited<ReturnType<typeof pool.connect>> | undefined;
+  // No annotation: pool.connect() is overloaded (callback form returns void),
+  // so ReturnType<typeof pool.connect> resolves to void. Let TS infer
+  // PoolClient | undefined from the assignments instead.
+  let client;
   try {
     client = await pool.connect();
     logger.info("Running startup migrations...");

@@ -19,7 +19,9 @@ import { recordEvent } from "./state-store";
 const bus = new EventEmitter();
 bus.setMaxListeners(50);
 
-export type MissionEvent = {
+// Named MissionBusEvent (not MissionEvent) to avoid clashing with the
+// mission_events row type re-exported from ./types via lib/mission's index.
+export type MissionBusEvent = {
   kind: MissionEventKind;
   missionId: number;
   payload: MissionEventPayload;
@@ -31,9 +33,9 @@ export async function emit(
   kind: MissionEventKind,
   missionId: number,
   payload: MissionEventPayload,
-  source: MissionEvent["source"] = "in-process",
+  source: MissionBusEvent["source"] = "in-process",
 ): Promise<void> {
-  const event: MissionEvent = { kind, missionId, payload, source, at: Date.now() };
+  const event: MissionBusEvent = { kind, missionId, payload, source, at: Date.now() };
   // Persist first so we never lose an event (inngest may be unreachable).
   await recordEvent({ missionId, kind, payload: payload as object, source });
   // Fire in-process subscribers.
@@ -50,11 +52,14 @@ export async function emit(
 }
 
 export function subscribe(
-  kind: MissionEventKind | "*",
-  handler: (event: MissionEvent) => void | Promise<void>,
+  kind: MissionEventKind | "*" | MissionEventKind[],
+  handler: (event: MissionBusEvent) => void | Promise<void>,
 ): () => void {
-  bus.on(kind, handler);
-  return () => bus.off(kind, handler);
+  const kinds = Array.isArray(kind) ? kind : [kind];
+  for (const k of kinds) bus.on(k, handler);
+  return () => {
+    for (const k of kinds) bus.off(k, handler);
+  };
 }
 
 /**

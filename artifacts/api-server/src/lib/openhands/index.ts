@@ -36,6 +36,7 @@ export {
   nextSequence,
   recordToolRun,
   toolSuccessRates,
+  type ToolSuccessStats,
 } from "./events";
 export { planGoal, parsePlanResponse, type PlannedGoal, type PlannedStep } from "./llm";
 export { executePlan } from "./executor";
@@ -53,5 +54,4 @@ export type {
   RecordEventInput,
   RecordToolRunInput,
   DispatchResult,
-  ToolSuccessStats,
 } from "./types";

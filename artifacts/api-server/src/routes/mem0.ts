@@ -18,7 +18,7 @@ import { MEM0_CATEGORIES, type Mem0Category } from "@workspace/db";
 const router = Router();
 
 router.get("/status", (_req, res) => {
-  res.json({
+  return res.json({
     ok: true,
     runtime: "mem0",
     categories: MEM0_CATEGORIES,
@@ -33,10 +33,10 @@ router.get("/facts", async (req, res) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? "100"), 10) || 100, 500);
   try {
     const facts = await listFacts({ userId, category, query, limit });
-    res.json({ ok: true, count: facts.length, facts });
+    return res.json({ ok: true, count: facts.length, facts });
   } catch (err) {
     logger.error({ err }, "GET /api/mem0/facts failed");
-    res.status(500).json({ ok: false, error: "list failed" });
+    return res.status(500).json({ ok: false, error: "list failed" });
   }
 });
 
@@ -57,10 +57,10 @@ router.post("/facts", async (req, res) => {
       metadata: (body.metadata as Record<string, unknown>) ?? {},
     });
     if (!row) return res.status(400).json({ ok: false, error: "upsert failed (validation)" });
-    res.status(201).json({ ok: true, fact: row });
+    return res.status(201).json({ ok: true, fact: row });
   } catch (err) {
     logger.error({ err }, "POST /api/mem0/facts failed");
-    res.status(500).json({ ok: false, error: "upsert failed" });
+    return res.status(500).json({ ok: false, error: "upsert failed" });
   }
 });
 
@@ -72,10 +72,10 @@ router.post("/facts/extract", async (req, res) => {
   if (!text.trim()) return res.status(400).json({ ok: false, error: "text required" });
   try {
     const facts = await extractAndUpsert(text, userId, sourceMemoryId);
-    res.json({ ok: true, extracted: facts.length, facts });
+    return res.json({ ok: true, extracted: facts.length, facts });
   } catch (err) {
     logger.error({ err }, "POST /api/mem0/facts/extract failed");
-    res.status(500).json({ ok: false, error: "extract failed" });
+    return res.status(500).json({ ok: false, error: "extract failed" });
   }
 });
 
@@ -86,10 +86,10 @@ router.post("/facts/:id/reinforce", async (req, res) => {
   try {
     const row = await reinforceFact(id, delta);
     if (!row) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, fact: row });
+    return res.json({ ok: true, fact: row });
   } catch (err) {
     logger.error({ err, id }, "POST /api/mem0/facts/:id/reinforce failed");
-    res.status(500).json({ ok: false, error: "reinforce failed" });
+    return res.status(500).json({ ok: false, error: "reinforce failed" });
   }
 });
 
@@ -100,10 +100,10 @@ router.post("/facts/:id/contradict", async (req, res) => {
   try {
     const row = await contradictFact(id, delta);
     if (!row) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, fact: row });
+    return res.json({ ok: true, fact: row });
   } catch (err) {
     logger.error({ err, id }, "POST /api/mem0/facts/:id/contradict failed");
-    res.status(500).json({ ok: false, error: "contradict failed" });
+    return res.status(500).json({ ok: false, error: "contradict failed" });
   }
 });
 
@@ -113,10 +113,10 @@ router.delete("/facts/:id", async (req, res) => {
   try {
     const ok = await deleteFact(id);
     if (!ok) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "DELETE /api/mem0/facts/:id failed");
-    res.status(500).json({ ok: false, error: "delete failed" });
+    return res.status(500).json({ ok: false, error: "delete failed" });
   }
 });
 

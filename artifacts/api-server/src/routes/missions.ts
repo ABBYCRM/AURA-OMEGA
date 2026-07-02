@@ -29,9 +29,9 @@ export const missionsRouter: Router = Router();
 missionsRouter.get("/stats", async (_req, res) => {
   try {
     const s = await missionStats();
-    res.json({ ok: true, ...s });
+    return res.json({ ok: true, ...s });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String((err as Error).message) });
+    return res.status(500).json({ ok: false, error: String((err as Error).message) });
   }
 });
 
@@ -40,9 +40,9 @@ missionsRouter.get("/", async (req, res) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? "50"), 10) || 50, 200);
   try {
     const list = await listMissions({ status, limit });
-    res.json({ ok: true, count: list.length, missions: list });
+    return res.json({ ok: true, count: list.length, missions: list });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String((err as Error).message) });
+    return res.status(500).json({ ok: false, error: String((err as Error).message) });
   }
 });
 
@@ -94,10 +94,10 @@ missionsRouter.post("/", async (req, res) => {
     // Kick the first tick in the background — don't block the response.
     setImmediate(() => { void tick(m.id).catch((err) => logger.error({ err, missionId: m.id }, "mission first tick failed")); });
 
-    res.status(201).json({ ok: true, mission: m, plan: steps, brainGate: brain.gate });
+    return res.status(201).json({ ok: true, mission: m, plan: steps, brainGate: brain.gate });
   } catch (err) {
     logger.error({ err }, "POST /api/missions failed");
-    res.status(500).json({ ok: false, error: "create failed" });
+    return res.status(500).json({ ok: false, error: "create failed" });
   }
 });
 
@@ -108,9 +108,9 @@ missionsRouter.get("/:id", async (req, res) => {
     const m = await getMission(id);
     if (!m) return res.status(404).json({ ok: false, error: "not found" });
     const events = await eventsForMission(id, 50);
-    res.json({ ok: true, mission: m, events });
+    return res.json({ ok: true, mission: m, events });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String((err as Error).message) });
+    return res.status(500).json({ ok: false, error: String((err as Error).message) });
   }
 });
 
@@ -121,9 +121,9 @@ missionsRouter.post("/:id/cancel", async (req, res) => {
     const m = await updateMissionState(id, { status: "cancelled", completedAt: new Date() });
     if (!m) return res.status(404).json({ ok: false, error: "not found" });
     await emit("mission.cancelled", id, { at: new Date().toISOString() }, "api");
-    res.json({ ok: true, mission: m });
+    return res.json({ ok: true, mission: m });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String((err as Error).message) });
+    return res.status(500).json({ ok: false, error: String((err as Error).message) });
   }
 });
 
@@ -139,8 +139,8 @@ missionsRouter.post("/:id/retry", async (req, res) => {
     await updateMissionState(id, { status: "executing", attempts: 0, lastError: null });
     await emit("mission.started", id, { retry: true }, "api");
     setImmediate(() => { void tick(id).catch((err) => logger.error({ err, missionId: id }, "retry tick failed")); });
-    res.json({ ok: true, mission: m });
+    return res.json({ ok: true, mission: m });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String((err as Error).message) });
+    return res.status(500).json({ ok: false, error: String((err as Error).message) });
   }
 });

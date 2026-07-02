@@ -30,7 +30,8 @@ export interface CrawlSeed {
 }
 
 export interface CrawlRequest {
-  seeds: CrawlSeed[];
+  /** Bare URL strings (mission kernel planner) or {url, label} objects (legacy route). */
+  seeds: Array<CrawlSeed | string>;
   /** How deep to follow links from each seed. Default 0 = just the seed URL. */
   maxDepth?: number;
   /** Max concurrent web_scrape calls. Default 4. */

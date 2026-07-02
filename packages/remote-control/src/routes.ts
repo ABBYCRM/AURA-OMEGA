@@ -12,7 +12,7 @@
  * The api-server mounts this router at /api/devices via routes/index.ts.
  */
 
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { logger } from "../../../artifacts/api-server/src/lib/logger";
 import { getAdapter, listAdapters } from "./adapters";
 import type { AdapterName } from "./adapter";
@@ -44,7 +44,7 @@ function toolCtx() {
 }
 
 devicesRouter.get("/status", (_req, res) => {
-  res.json({
+  return res.json({
     ok: true,
     runtime: "remote-control",
     adapters: listAdapters().map((a) => ({ name: a.name, stage: a.stage })),
@@ -54,9 +54,9 @@ devicesRouter.get("/status", (_req, res) => {
 devicesRouter.get("/stats", async (_req, res) => {
   try {
     const s = await installStats();
-    res.json({ ok: true, ...s });
+    return res.json({ ok: true, ...s });
   } catch (err) {
-    res.status(500).json({ ok: false, error: String((err as Error).message) });
+    return res.status(500).json({ ok: false, error: String((err as Error).message) });
   }
 });
 
@@ -65,10 +65,10 @@ devicesRouter.get("/", async (req, res) => {
   try {
     const enabledOnly = req.query.enabled === "true";
     const devices = await listDevices(enabledOnly);
-    res.json({ ok: true, count: devices.length, devices });
+    return res.json({ ok: true, count: devices.length, devices });
   } catch (err) {
     logger.error({ err }, "GET /api/devices failed");
-    res.status(500).json({ ok: false, error: "list failed" });
+    return res.status(500).json({ ok: false, error: "list failed" });
   }
 });
 
@@ -95,10 +95,10 @@ devicesRouter.post("/", async (req, res) => {
       metadata: (body.metadata as Record<string, unknown>) ?? {},
     });
     if (!dev) return res.status(500).json({ ok: false, error: "insert failed" });
-    res.status(201).json({ ok: true, device: dev });
+    return res.status(201).json({ ok: true, device: dev });
   } catch (err) {
     logger.error({ err }, "POST /api/devices failed");
-    res.status(500).json({ ok: false, error: "insert failed" });
+    return res.status(500).json({ ok: false, error: "insert failed" });
   }
 });
 
@@ -108,9 +108,9 @@ devicesRouter.delete("/:id", async (req, res) => {
   try {
     const ok = await deleteDevice(id);
     if (!ok) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ ok: false, error: "delete failed" });
+    return res.status(500).json({ ok: false, error: "delete failed" });
   }
 });
 
@@ -121,9 +121,9 @@ devicesRouter.get("/:id", async (req, res) => {
   try {
     const dev = await getDevice(id);
     if (!dev) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, device: dev });
+    return res.json({ ok: true, device: dev });
   } catch (err) {
-    res.status(500).json({ ok: false, error: "fetch failed" });
+    return res.status(500).json({ ok: false, error: "fetch failed" });
   }
 });
 
@@ -136,10 +136,10 @@ devicesRouter.get("/:id/status", async (req, res) => {
     const adapter = getAdapter(dev.adapter as AdapterName);
     const status = await adapter.status(toolCtx(), dev.host);
     await setDeviceStatus(id, status.online ? "online" : "offline");
-    res.json({ ok: true, device: dev, status });
+    return res.json({ ok: true, device: dev, status });
   } catch (err) {
     logger.error({ err, id }, "GET /api/devices/:id/status failed");
-    res.status(500).json({ ok: false, error: "status failed" });
+    return res.status(500).json({ ok: false, error: "status failed" });
   }
 });
 
@@ -166,15 +166,15 @@ devicesRouter.post("/:id/connect", async (req, res) => {
       output: result.url ?? null,
       status: result.ok ? "success" : "failed",
     });
-    if (!result.ok) return res.status(501).json({ ok: false, ...result });
-    res.json({ ok: true, device: dev, ...result });
+    if (!result.ok) return res.status(501).json({ ...result, ok: false });
+    return res.json({ ...result, ok: true, device: dev });
   } catch (err) {
     const msg = String((err as Error).message);
     if (/not implemented yet/.test(msg)) {
       return res.status(501).json({ ok: false, error: msg, status: "not_implemented" });
     }
     logger.error({ err, id }, "POST /api/devices/:id/connect failed");
-    res.status(500).json({ ok: false, error: "connect failed" });
+    return res.status(500).json({ ok: false, error: "connect failed" });
   }
 });
 
@@ -224,16 +224,16 @@ devicesRouter.post("/:id/command", async (req, res) => {
       durationMs: Date.now() - started,
     });
     if (!out.ok && out.error && /not implemented/i.test(out.error)) {
-      return res.status(501).json({ ok: false, ...out, status: "not_implemented" });
+      return res.status(501).json({ ...out, ok: false, status: "not_implemented" });
     }
-    res.json({ ok: out.ok, ...out });
+    return res.json({ ...out });
   } catch (err) {
     const msg = String((err as Error).message);
     if (/not implemented yet/.test(msg)) {
       return res.status(501).json({ ok: false, error: msg, status: "not_implemented" });
     }
     logger.error({ err, id }, "POST /api/devices/:id/command failed");
-    res.status(500).json({ ok: false, error: "command failed" });
+    return res.status(500).json({ ok: false, error: "command failed" });
   }
 });
 
@@ -255,10 +255,10 @@ devicesRouter.post("/:id/screenshot", async (req, res) => {
     });
     res.setHeader("Content-Type", "image/png");
     res.setHeader("X-Screenshot-Id", String(ssId ?? "0"));
-    res.send(buf);
+    return res.send(buf);
   } catch (err) {
     logger.error({ err, id }, "POST /api/devices/:id/screenshot failed");
-    res.status(501).json({ ok: false, error: `screenshot not yet implemented for this adapter: ${(err as Error).message}` });
+    return res.status(501).json({ ok: false, error: `screenshot not yet implemented for this adapter: ${(err as Error).message}` });
   }
 });
 
@@ -275,7 +275,7 @@ devicesRouter.post("/:id/install", async (req, res) => {
       script,
       status: "queued",
     });
-    res.status(202).json({
+    return res.status(202).json({
       ok: true,
       device: dev,
       installRunId: run?.id ?? null,
@@ -283,7 +283,7 @@ devicesRouter.post("/:id/install", async (req, res) => {
       instructions: `Run on the target Windows PC as Administrator: powershell -ExecutionPolicy Bypass -File ${script}`,
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: "install failed" });
+    return res.status(500).json({ ok: false, error: "install failed" });
   }
 });
 
@@ -292,9 +292,9 @@ devicesRouter.get("/:id/commands", async (req, res) => {
   if (Number.isNaN(id)) return res.status(400).json({ ok: false, error: "invalid id" });
   try {
     const cmds = await listCommandsForDevice(id);
-    res.json({ ok: true, count: cmds.length, commands: cmds });
+    return res.json({ ok: true, count: cmds.length, commands: cmds });
   } catch (err) {
-    res.status(500).json({ ok: false, error: "list commands failed" });
+    return res.status(500).json({ ok: false, error: "list commands failed" });
   }
 });
 
@@ -323,9 +323,9 @@ devicesRouter.post("/import-tailscale-status", async (req, res) => {
       });
       if (dev?.id) created.push(dev.id);
     }
-    res.json({ ok: true, peerCount: peers.length, createdCount: created.length, created });
+    return res.json({ ok: true, peerCount: peers.length, createdCount: created.length, created });
   } catch (err) {
-    res.status(500).json({ ok: false, error: "import failed" });
+    return res.status(500).json({ ok: false, error: "import failed" });
   }
 });
 
@@ -338,14 +338,14 @@ devicesRouter.post("/rustdesk/build-connect-url", (req, res) => {
   const a = new RustDeskAdapter();
   const url = a.buildConnectUrl(id, password);
   const generatedPwd = a.generateTempPassword();
-  res.json({ ok: true, url, generatedPassword: password ? null : generatedPwd });
+  return res.json({ ok: true, url, generatedPassword: password ? null : generatedPwd });
 });
 
 // ─── Bootstrap Installer — serve the .ps1 script from the repo ─────────
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-devicesRouter.get("/bootstrap/bos-omega-bootstrap.ps1", (_req, res) => {
+devicesRouter.get("/bootstrap/bos-omega-bootstrap.ps1", (_req: Request, res: Response) => {
   // Walk up from packages/remote-control/src/routes.ts to repo root.
   const candidates = [
     join(process.cwd(), "scripts/bos-omega-bootstrap.ps1"),
@@ -361,7 +361,7 @@ devicesRouter.get("/bootstrap/bos-omega-bootstrap.ps1", (_req, res) => {
       return;
     }
   }
-  res.status(404).json({ ok: false, error: "bootstrap script not found in repo" });
+  return res.status(404).json({ ok: false, error: "bootstrap script not found in repo" });
 });
 
 function scriptForAdapter(adapter: AdapterName): string {

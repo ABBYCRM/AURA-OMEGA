@@ -28,7 +28,7 @@ export const shellEngine: EngineAdapter = {
         if (settled) return;
         try { child.kill("SIGKILL"); } catch { /* ignore */ }
         settled = true;
-        resolve({ ok: false, error: `killed after ${timeout}ms`, stdout, stderr, durationMs: Date.now() - started });
+        resolve({ ok: false, error: `killed after ${timeout}ms`, output: stdout, facts: { stdout, stderr }, durationMs: Date.now() - started });
       }, timeout);
       child.stdout?.on("data", (b) => { stdout += b.toString("utf-8"); if (stdout.length > MAX) stdout = stdout.slice(0, MAX) + "…[truncated]"; });
       child.stderr?.on("data", (b) => { stderr += b.toString("utf-8"); if (stderr.length > MAX) stderr = stderr.slice(0, MAX) + "…[truncated]"; });
@@ -36,7 +36,7 @@ export const shellEngine: EngineAdapter = {
         if (settled) return;
         settled = true;
         clearTimeout(t);
-        resolve({ ok: false, error: String(err).slice(0, 200), stdout, stderr, durationMs: Date.now() - started });
+        resolve({ ok: false, error: String(err).slice(0, 200), output: stdout, facts: { stdout, stderr }, durationMs: Date.now() - started });
       });
       child.on("close", (code) => {
         if (settled) return;

@@ -30,51 +30,66 @@ async function loginCookie(): Promise<string> {
   return Array.isArray(setCookie) ? setCookie[0] : (setCookie as unknown as string);
 }
 
-describe("vault auth gating", () => {
-  it("rejects anonymous GET /api/vault with 401 and discloses no secret names", async () => {
+// Login was removed per operator directive (2026-07-02) — vault routes are
+// public. What must still hold: secret VALUES and encrypted material are never
+// exposed, names are validated, and protected runtime vars cannot be set.
+describe("vault routes (public — login removed per operator directive)", () => {
+  const secretRow = {
+    id: 1,
+    name: "OPENAI_API_KEY",
+    description: null,
+    ciphertext: "x",
+    iv: "y",
+    authTag: "z",
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+  };
+
+  it("GET /api/vault returns metadata only — never ciphertext, iv, or authTag", async () => {
+    queueDbResults([secretRow]);
     const res = await request(app).get("/api/vault");
-    expect(res.status).toBe(401);
-    expect(res.body).not.toHaveProperty("0");
-    expect(JSON.stringify(res.body)).not.toContain("name");
-  });
-
-  it("rejects anonymous PUT /api/vault with 401", async () => {
-    const res = await request(app).put("/api/vault").send({ name: "X", value: "y" });
-    expect(res.status).toBe(401);
-  });
-
-  it("rejects anonymous DELETE /api/vault/:name with 401", async () => {
-    const res = await request(app).delete("/api/vault/X");
-    expect(res.status).toBe(401);
-  });
-
-  it("rejects a forged/garbage session token with 401", async () => {
-    const res = await request(app)
-      .get("/api/vault")
-      .set("Cookie", "aura-omega-ui_session=not.a.valid.token");
-    expect(res.status).toBe(401);
-  });
-
-  it("allows GET /api/vault once signed in", async () => {
-    const cookie = await loginCookie();
-    queueDbResults([
-      {
-        id: 1,
-        name: "OPENAI_API_KEY",
-        description: null,
-        ciphertext: "x",
-        iv: "y",
-        authTag: "z",
-        createdAt: new Date("2026-01-01T00:00:00.000Z"),
-        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-      },
-    ]);
-    const res = await request(app).get("/api/vault").set("Cookie", cookie);
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].name).toBe("OPENAI_API_KEY");
-    // Encrypted material is never exposed.
     expect(res.body[0]).not.toHaveProperty("ciphertext");
+    expect(res.body[0]).not.toHaveProperty("iv");
+    expect(res.body[0]).not.toHaveProperty("authTag");
+  });
+
+  it("GET /api/vault still works with a session cookie", async () => {
+    const cookie = await loginCookie();
+    queueDbResults([secretRow]);
+    const res = await request(app).get("/api/vault").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body[0]).not.toHaveProperty("ciphertext");
+  });
+
+  it("PUT /api/vault rejects a name that is not an env-var identifier", async () => {
+    const res = await request(app).put("/api/vault").send({ name: "not-a-var", value: "y" });
+    expect(res.status).toBe(400);
+  });
+
+  it("PUT /api/vault refuses to set protected runtime variables", async () => {
+    for (const name of ["SESSION_SECRET", "OPERATOR_PASSWORD", "DATABASE_URL", "PATH"]) {
+      const res = await request(app).put("/api/vault").send({ name, value: "y" });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("PUT /api/vault upserts a secret and returns metadata without the value", async () => {
+    queueDbResults([{ ...secretRow, name: "TEST_FAKE_KEY" }]);
+    const res = await request(app).put("/api/vault").send({ name: "TEST_FAKE_KEY", value: "sekrit" });
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe("TEST_FAKE_KEY");
+    expect(JSON.stringify(res.body)).not.toContain("sekrit");
+    // The secret is activated in the environment for live integrations.
+    expect(process.env["TEST_FAKE_KEY"]).toBe("sekrit");
+  });
+
+  it("DELETE /api/vault/:name returns 404 for a missing secret", async () => {
+    queueDbResults([]);
+    const res = await request(app).delete("/api/vault/NOPE");
+    expect(res.status).toBe(404);
   });
 });
 

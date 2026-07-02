@@ -89,8 +89,9 @@ export async function startCrawl(req: CrawlRequest): Promise<{
   }
   const crawl = await createCrawl(req);
   if (!crawl) return null;
+  const crawlDbId = crawl.id;
 
-  await setCrawlStatus(crawl.id, "running");
+  await setCrawlStatus(crawlDbId, "running");
 
   const concurrency = Math.max(1, Math.min(req.concurrency ?? 2, 8));
   // Cap pages hard at 10 — crawl4ai is now a fallback after searxng/tavily,
@@ -162,7 +163,7 @@ export async function startCrawl(req: CrawlRequest): Promise<{
         pages.push(page);
 
         await recordPage({
-          crawlId: crawl.id,
+          crawlId: crawlDbId,
           url: job.url,
           label: job.label,
           status,

@@ -17,7 +17,7 @@ import type { ParseRequest } from "../lib/docling/types";
 const router = Router();
 
 router.get("/status", (_req, res) => {
-  res.json({
+  return res.json({
     ok: true,
     runtime: "docling",
     note: "in-stack HTML/MD/TXT parsers built-in; PDF/DOCX/XLSX are opt-in via npm packages",
@@ -30,17 +30,17 @@ router.post("/detect", (req, res) => {
   const url = (body.url as string | undefined) ?? null;
   const sample = typeof body.sample === "string" ? body.sample : undefined;
   const format = detectFormat(mimeType, url, sample);
-  res.json({ ok: true, format });
+  return res.json({ ok: true, format });
 });
 
 router.get("/documents", async (req, res) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? "50"), 10) || 50, 200);
   try {
     const docs = await listDocuments(limit);
-    res.json({ ok: true, count: docs.length, documents: docs });
+    return res.json({ ok: true, count: docs.length, documents: docs });
   } catch (err) {
     logger.error({ err }, "GET /api/docling/documents failed");
-    res.status(500).json({ ok: false, error: "list failed" });
+    return res.status(500).json({ ok: false, error: "list failed" });
   }
 });
 
@@ -50,20 +50,20 @@ router.get("/documents/:id", async (req, res) => {
   try {
     const doc = await getDocumentById(id);
     if (!doc) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, document: doc });
+    return res.json({ ok: true, document: doc });
   } catch (err) {
     logger.error({ err, id }, "GET /api/docling/documents/:id failed");
-    res.status(500).json({ ok: false, error: "fetch failed" });
+    return res.status(500).json({ ok: false, error: "fetch failed" });
   }
 });
 
 router.get("/stats", async (_req, res) => {
   try {
     const s = await stats();
-    res.json({ ok: true, ...s });
+    return res.json({ ok: true, ...s });
   } catch (err) {
     logger.error({ err }, "GET /api/docling/stats failed");
-    res.status(500).json({ ok: false, error: "stats failed" });
+    return res.status(500).json({ ok: false, error: "stats failed" });
   }
 });
 
@@ -92,10 +92,10 @@ router.post("/parse", async (req, res) => {
     if (out.error && !out.result) {
       return res.status(500).json({ ok: false, error: out.error, documentId: out.documentId });
     }
-    res.status(201).json({ ok: true, documentId: out.documentId, result: out.result });
+    return res.status(201).json({ ok: true, documentId: out.documentId, result: out.result });
   } catch (err) {
     logger.error({ err }, "POST /api/docling/parse failed");
-    res.status(500).json({ ok: false, error: "parse failed" });
+    return res.status(500).json({ ok: false, error: "parse failed" });
   }
 });
 

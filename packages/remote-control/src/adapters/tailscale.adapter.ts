@@ -54,7 +54,7 @@ export class TailscaleAdapter extends StubAdapter implements RemoteControlAdapte
       out.push({
         id: String(s.ID ?? "self"),
         name: String(s.HostName ?? s.DNSName ?? "self"),
-        tailscaleIp: String(s.TailscaleIPs?.[0] ?? ""),
+        tailscaleIp: String((s.TailscaleIPs as string[] | undefined)?.[0] ?? ""),
         online: Boolean(s.Online ?? true),
         os: String(s.OS ?? ""),
       });
@@ -63,7 +63,7 @@ export class TailscaleAdapter extends StubAdapter implements RemoteControlAdapte
       out.push({
         id,
         name: String(p.HostName ?? p.DNSName ?? id),
-        tailscaleIp: String(p.TailscaleIPs?.[0] ?? ""),
+        tailscaleIp: String((p.TailscaleIPs as string[] | undefined)?.[0] ?? ""),
         online: Boolean(p.Online ?? false),
         os: String(p.OS ?? ""),
       });

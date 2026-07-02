@@ -26,6 +26,9 @@ export const crawl4aiEngine: EngineAdapter = {
         memoryKeyPrefix: `mission/${missionId}`,
         memoryTag: "mission",
       });
+      if (!r) {
+        return { ok: false, error: "crawl failed to start (DB unavailable or no seeds)", durationMs: Date.now() - started };
+      }
       const failed = r.pages.filter((p) => p.status === "failed").length;
       const succeeded = r.pages.filter((p) => p.status === "success").length;
       // Accept partial: a crawl is 'ok' if it ran at all and got >= 1 page

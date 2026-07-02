@@ -30,7 +30,9 @@ export async function getDeviceByHost(host: string): Promise<BosDevice | null> {
   return row ?? null;
 }
 
-export async function upsertDevice(input: InsertBosDevice): Promise<BosDevice | null> {
+export async function upsertDevice(
+  input: InsertBosDevice & { id?: number },
+): Promise<BosDevice | null> {
   try {
     if (input.id) {
       const [row] = await db

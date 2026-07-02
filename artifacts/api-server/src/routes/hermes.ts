@@ -25,7 +25,7 @@ router.get("/status", async (_req, res) => {
     const active = skills.filter((s) => s.status === "active");
     const candidates = skills.filter((s) => s.status === "candidate");
     const retired = skills.filter((s) => s.status === "retired");
-    res.json({
+    return res.json({
       ok: true,
       uptime: process.uptime(),
       skills: {
@@ -43,7 +43,7 @@ router.get("/status", async (_req, res) => {
     });
   } catch (err) {
     logger.error({ err }, "GET /api/hermes/status failed");
-    res.status(500).json({ ok: false, error: "hermes status failed" });
+    return res.status(500).json({ ok: false, error: "hermes status failed" });
   }
 });
 
@@ -52,10 +52,10 @@ router.get("/skills", async (req, res) => {
   const status = typeof req.query.status === "string" ? req.query.status : undefined;
   try {
     const skills = await listSkills({ status, limit: 200 });
-    res.json({ ok: true, count: skills.length, skills });
+    return res.json({ ok: true, count: skills.length, skills });
   } catch (err) {
     logger.error({ err }, "GET /api/hermes/skills failed");
-    res.status(500).json({ ok: false, error: "list skills failed" });
+    return res.status(500).json({ ok: false, error: "list skills failed" });
   }
 });
 
@@ -65,10 +65,10 @@ router.post("/skills/match", async (req, res) => {
   if (!goal.trim()) return res.status(400).json({ ok: false, error: "goal is required" });
   try {
     const match = await matchSkillForGoal(goal);
-    res.json({ ok: true, match });
+    return res.json({ ok: true, match });
   } catch (err) {
     logger.error({ err, goal }, "POST /api/hermes/skills/match failed");
-    res.status(500).json({ ok: false, error: "skill match failed" });
+    return res.status(500).json({ ok: false, error: "skill match failed" });
   }
 });
 
@@ -77,10 +77,10 @@ router.get("/sessions", async (req, res) => {
   const limit = Math.min(parseInt(String(req.query.limit ?? "25"), 10) || 25, 100);
   try {
     const sessions = await listRecentSessions(limit);
-    res.json({ ok: true, count: sessions.length, sessions });
+    return res.json({ ok: true, count: sessions.length, sessions });
   } catch (err) {
     logger.error({ err }, "GET /api/hermes/sessions failed");
-    res.status(500).json({ ok: false, error: "list sessions failed" });
+    return res.status(500).json({ ok: false, error: "list sessions failed" });
   }
 });
 
@@ -91,10 +91,10 @@ router.get("/sessions/:id", async (req, res) => {
   try {
     const session = await getSessionById(id);
     if (!session) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, session });
+    return res.json({ ok: true, session });
   } catch (err) {
     logger.error({ err, id }, "GET /api/hermes/sessions/:id failed");
-    res.status(500).json({ ok: false, error: "fetch session failed" });
+    return res.status(500).json({ ok: false, error: "fetch session failed" });
   }
 });
 
@@ -104,10 +104,10 @@ router.get("/search", async (req, res) => {
   if (!q.trim()) return res.status(400).json({ ok: false, error: "q is required" });
   try {
     const sessions = await searchSessionsByKeyword(q, 25);
-    res.json({ ok: true, count: sessions.length, sessions });
+    return res.json({ ok: true, count: sessions.length, sessions });
   } catch (err) {
     logger.error({ err, q }, "GET /api/hermes/search failed");
-    res.status(500).json({ ok: false, error: "search failed" });
+    return res.status(500).json({ ok: false, error: "search failed" });
   }
 });
 
@@ -115,10 +115,10 @@ router.get("/search", async (req, res) => {
 router.post("/heartbeat", async (_req, res) => {
   try {
     const report = await runHeartbeat();
-    res.json({ ok: true, report });
+    return res.json({ ok: true, report });
   } catch (err) {
     logger.error({ err }, "POST /api/hermes/heartbeat failed");
-    res.status(500).json({ ok: false, error: "heartbeat failed" });
+    return res.status(500).json({ ok: false, error: "heartbeat failed" });
   }
 });
 
@@ -126,10 +126,10 @@ router.post("/heartbeat", async (_req, res) => {
 router.post("/promote", async (_req, res) => {
   try {
     const { promoted, retired } = await pruneAndPromote();
-    res.json({ ok: true, promoted, retired });
+    return res.json({ ok: true, promoted, retired });
   } catch (err) {
     logger.error({ err }, "POST /api/hermes/promote failed");
-    res.status(500).json({ ok: false, error: "promote failed" });
+    return res.status(500).json({ ok: false, error: "promote failed" });
   }
 });
 
@@ -141,10 +141,10 @@ router.post("/nudges", async (req, res) => {
   const payload = (req.body?.payload ?? {}) as Record<string, unknown>;
   try {
     await queueNudge(kind as any, payload);
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (err) {
     logger.error({ err, kind }, "POST /api/hermes/nudges failed");
-    res.status(500).json({ ok: false, error: "queue nudge failed" });
+    return res.status(500).json({ ok: false, error: "queue nudge failed" });
   }
 });
 

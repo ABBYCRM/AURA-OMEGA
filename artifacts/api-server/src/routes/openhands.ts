@@ -33,7 +33,7 @@ function asInt(v: unknown, fallback: number): number {
 
 router.get("/status", (_req, res) => {
   const upstream = process.env["OPENHANDS_BASE_URL"] ?? null;
-  res.json({
+  return res.json({
     ok: true,
     upstream,
     upstreamConfigured: !!upstream,
@@ -47,10 +47,10 @@ router.get("/workspaces", async (req, res) => {
   const limit = asInt(req.query.limit, 100);
   try {
     const workspaces = await listWorkspaces({ status, limit });
-    res.json({ ok: true, count: workspaces.length, workspaces });
+    return res.json({ ok: true, count: workspaces.length, workspaces });
   } catch (err) {
     logger.error({ err }, "GET /api/openhands/workspaces failed");
-    res.status(500).json({ ok: false, error: "list workspaces failed" });
+    return res.status(500).json({ ok: false, error: "list workspaces failed" });
   }
 });
 
@@ -69,10 +69,10 @@ router.post("/workspaces", async (req, res) => {
       agentBackend: (body.agentBackend as any) ?? "openhands",
     });
     if (!ws) return res.status(500).json({ ok: false, error: "create failed" });
-    res.status(201).json({ ok: true, workspace: ws });
+    return res.status(201).json({ ok: true, workspace: ws });
   } catch (err) {
     logger.error({ err }, "POST /api/openhands/workspaces failed");
-    res.status(500).json({ ok: false, error: "create failed" });
+    return res.status(500).json({ ok: false, error: "create failed" });
   }
 });
 
@@ -82,10 +82,10 @@ router.get("/workspaces/:id", async (req, res) => {
   try {
     const ws = await getWorkspaceById(id);
     if (!ws) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, workspace: ws });
+    return res.json({ ok: true, workspace: ws });
   } catch (err) {
     logger.error({ err, id }, "GET /api/openhands/workspaces/:id failed");
-    res.status(500).json({ ok: false, error: "fetch failed" });
+    return res.status(500).json({ ok: false, error: "fetch failed" });
   }
 });
 
@@ -98,10 +98,10 @@ router.post("/workspaces/:id/status", async (req, res) => {
   }
   try {
     await setWorkspaceStatus(id, status as any);
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id, status }, "POST /api/openhands/workspaces/:id/status failed");
-    res.status(500).json({ ok: false, error: "update failed" });
+    return res.status(500).json({ ok: false, error: "update failed" });
   }
 });
 
@@ -116,10 +116,10 @@ router.get("/sessions", async (req, res) => {
       status,
       limit,
     });
-    res.json({ ok: true, count: sessions.length, sessions });
+    return res.json({ ok: true, count: sessions.length, sessions });
   } catch (err) {
     logger.error({ err }, "GET /api/openhands/sessions failed");
-    res.status(500).json({ ok: false, error: "list sessions failed" });
+    return res.status(500).json({ ok: false, error: "list sessions failed" });
   }
 });
 
@@ -138,10 +138,10 @@ router.post("/sessions/dispatch", async (req, res) => {
       metadata: (body.metadata as Record<string, unknown>) ?? {},
     });
     if (!result) return res.status(404).json({ ok: false, error: "workspace not found or archived" });
-    res.status(result.status === "failed" ? 502 : 201).json({ ok: true, result });
+    return res.status(result.status === "failed" ? 502 : 201).json({ ok: true, result });
   } catch (err) {
     logger.error({ err }, "POST /api/openhands/sessions/dispatch failed");
-    res.status(500).json({ ok: false, error: "dispatch failed" });
+    return res.status(500).json({ ok: false, error: "dispatch failed" });
   }
 });
 
@@ -151,10 +151,10 @@ router.get("/sessions/:id", async (req, res) => {
   try {
     const session = await getSessionById(id);
     if (!session) return res.status(404).json({ ok: false, error: "not found" });
-    res.json({ ok: true, session });
+    return res.json({ ok: true, session });
   } catch (err) {
     logger.error({ err, id }, "GET /api/openhands/sessions/:id failed");
-    res.status(500).json({ ok: false, error: "fetch failed" });
+    return res.status(500).json({ ok: false, error: "fetch failed" });
   }
 });
 
@@ -168,10 +168,10 @@ router.post("/sessions/:id/status", async (req, res) => {
   if (!allowed.includes(status)) return res.status(400).json({ ok: false, error: "invalid status" });
   try {
     await setSessionStatus(id, status as any, outcome as any, finalAnswer);
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (err) {
     logger.error({ err, id }, "POST /api/openhands/sessions/:id/status failed");
-    res.status(500).json({ ok: false, error: "update failed" });
+    return res.status(500).json({ ok: false, error: "update failed" });
   }
 });
 
@@ -182,10 +182,10 @@ router.get("/sessions/:id/events", async (req, res) => {
   const limit = asInt(req.query.limit, 200);
   try {
     const events = await listEvents(id, limit);
-    res.json({ ok: true, count: events.length, events });
+    return res.json({ ok: true, count: events.length, events });
   } catch (err) {
     logger.error({ err, id }, "GET /api/openhands/sessions/:id/events failed");
-    res.status(500).json({ ok: false, error: "list events failed" });
+    return res.status(500).json({ ok: false, error: "list events failed" });
   }
 });
 
@@ -207,10 +207,10 @@ router.post("/sessions/:id/events", async (req, res) => {
       sequence,
     });
     if (!event) return res.status(500).json({ ok: false, error: "append failed" });
-    res.status(201).json({ ok: true, event });
+    return res.status(201).json({ ok: true, event });
   } catch (err) {
     logger.error({ err, id }, "POST /api/openhands/sessions/:id/events failed");
-    res.status(500).json({ ok: false, error: "append failed" });
+    return res.status(500).json({ ok: false, error: "append failed" });
   }
 });
 
@@ -233,20 +233,20 @@ router.post("/sessions/:id/tool-runs", async (req, res) => {
       error: (body.error as string | undefined) ?? null,
     });
     if (!run) return res.status(500).json({ ok: false, error: "record failed" });
-    res.status(201).json({ ok: true, run });
+    return res.status(201).json({ ok: true, run });
   } catch (err) {
     logger.error({ err, id }, "POST /api/openhands/sessions/:id/tool-runs failed");
-    res.status(500).json({ ok: false, error: "record failed" });
+    return res.status(500).json({ ok: false, error: "record failed" });
   }
 });
 
 router.get("/tool-stats", async (_req, res) => {
   try {
     const stats = await toolSuccessRates();
-    res.json({ ok: true, stats });
+    return res.json({ ok: true, stats });
   } catch (err) {
     logger.error({ err }, "GET /api/openhands/tool-stats failed");
-    res.status(500).json({ ok: false, error: "stats failed" });
+    return res.status(500).json({ ok: false, error: "stats failed" });
   }
 });
 
