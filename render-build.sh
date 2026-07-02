@@ -44,6 +44,9 @@ npx --yes pnpm@9 install --no-frozen-lockfile
 echo "=== Building lib packages ==="
 npx --yes pnpm@9 run typecheck:libs
 
+echo "=== Pushing DB schema ==="
+npx --yes pnpm@9 --filter @workspace/db run push || echo "WARNING: DB push failed, continuing anyway"
+
 echo "=== Building API server ==="
 npx --yes pnpm@9 --filter @workspace/api-server run build
 
