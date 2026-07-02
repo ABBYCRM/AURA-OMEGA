@@ -86,9 +86,22 @@ function TileButton({ tile, onLaunch }: { tile: Tile; onLaunch: (t: Tile) => voi
   );
 }
 
+// The live roster comes from /api/agents; when the DB is unreachable the
+// swarm still exists (ids are fixed: ABBY=1, AURA-1..5 = 2-6), so fall back
+// to the known roster instead of rendering an empty section.
+const FALLBACK_SWARM = [
+  { id: 1, name: "ABBY",   color: "#e2603c" },
+  { id: 2, name: "AURA-1", color: "#aa55ff" },
+  { id: 3, name: "AURA-2", color: "#22d3ee" },
+  { id: 4, name: "AURA-3", color: "#10b981" },
+  { id: 5, name: "AURA-4", color: "#f59e0b" },
+  { id: 6, name: "AURA-5", color: "#ef4444" },
+];
+
 export default function AgentsHub() {
   const [, navigate] = useLocation();
-  const { data: agents = [] } = useListAgents();
+  const { data } = useListAgents();
+  const agents = Array.isArray(data) && data.length > 0 ? data : FALLBACK_SWARM;
 
   const launch = (tile: Tile) => {
     if (tile.href) {

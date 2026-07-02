@@ -161,17 +161,25 @@ export default function ChatPage() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
 
-  // Real swarm roster for the engine selector.
+  // Real swarm roster for the engine selector. Agent ids are fixed
+  // (ABBY=1, AURA-1..5 = 2-6), so if the API is down the selector still
+  // offers the known swarm instead of only Auto.
   useEffect(() => {
     let alive = true;
+    const fallback: AgentOption[] = [
+      { id: 1, name: "ABBY" }, { id: 2, name: "AURA-1" }, { id: 3, name: "AURA-2" },
+      { id: 4, name: "AURA-3" }, { id: 5, name: "AURA-4" }, { id: 6, name: "AURA-5" },
+    ];
     fetch(resolveApiUrl("/api/agents"))
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((list) => {
-        if (alive && Array.isArray(list)) {
-          setAgents(list.map((a: { id: number; name: string }) => ({ id: a.id, name: a.name })));
-        }
+        if (!alive) return;
+        const rows = Array.isArray(list) && list.length > 0
+          ? list.map((a: { id: number; name: string }) => ({ id: a.id, name: a.name }))
+          : fallback;
+        setAgents(rows);
       })
-      .catch(() => { /* selector just shows Auto */ });
+      .catch(() => { if (alive) setAgents(fallback); });
     return () => { alive = false; };
   }, []);
 
