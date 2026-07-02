@@ -38,8 +38,6 @@ const sampleMessage = {
 beforeEach(async () => {
   resetDbMock();
   process.env["SESSION_SECRET"] = "test-session-secret";
-  process.env["AUTH_USERS"] = "tester:test-pass:Test User";
-  await agent.post("/api/auth/login").send({ username: "tester", password: "test-pass" });
 });
 
 afterEach(() => {

@@ -48,8 +48,8 @@ const MANAGED_KEYS = [
   "INNGEST_SIGNING_KEY",
   "E2B_API_KEY",
   "SANDBOX_GITHUB_TOKEN",
-  // App auth (SESSION_SECRET is intentionally excluded — never rotate it)
-  "AUTH_USERS",
+  // Login removed 2026-07-02 — AUTH_USERS no longer managed. SESSION_SECRET
+  // stays excluded forever: it is the vault encryption key, never rotate it.
   // DigitalOcean infrastructure
   "DO_API_KEY",
   "DO_RELAY_IPS",

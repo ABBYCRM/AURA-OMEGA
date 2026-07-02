@@ -21,8 +21,6 @@ tags:
     description: Agent telemetry and internal state
   - name: swarm
     description: Swarm control
-  - name: auth
-    description: Operator authentication
   - name: vault
     description: Encrypted secrets vault (operator only)
   - name: social
@@ -328,57 +326,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SwarmStatus"
-
-  /auth/login:
-    post:
-      operationId: login
-      tags: [auth]
-      summary: Sign in as an operator (sets an HttpOnly session cookie)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
-      responses:
-        "200":
-          description: Signed in
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthStatus"
-        "401":
-          description: Invalid username or password
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /auth/logout:
-    post:
-      operationId: logout
-      tags: [auth]
-      summary: Sign out (clears the session cookie)
-      responses:
-        "200":
-          description: Signed out
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthStatus"
-
-  /auth/me:
-    get:
-      operationId: getAuthStatus
-      tags: [auth]
-      summary: Whether the caller holds a valid operator session
-      responses:
-        "200":
-          description: Authentication status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthStatus"
 
   /social/platforms:
     get:
@@ -801,26 +748,6 @@ components:
       required: [deleted]
       properties:
         deleted:
-          type: string
-
-    LoginRequest:
-      type: object
-      required: [username, password]
-      properties:
-        username:
-          type: string
-        password:
-          type: string
-
-    AuthStatus:
-      type: object
-      required: [authenticated]
-      properties:
-        authenticated:
-          type: boolean
-        username:
-          type: string
-        displayName:
           type: string
 
     Error:

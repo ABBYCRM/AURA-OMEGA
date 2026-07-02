@@ -313,17 +313,6 @@ export interface DeleteVaultSecretResult {
   deleted: string;
 }
 
-export interface LoginRequest {
-  username: string;
-  password: string;
-}
-
-export interface AuthStatus {
-  authenticated: boolean;
-  username?: string;
-  displayName?: string;
-}
-
 export interface Error {
   error: string;
 }

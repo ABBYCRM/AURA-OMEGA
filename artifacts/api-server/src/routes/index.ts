@@ -11,7 +11,6 @@ import aiRouter from "./ai";
 import externalRouter from "./external";
 import integrationsRouter from "./integrations";
 import selfCheckRouter from "./selfCheck";
-import authRouter from "./auth";
 import vaultRouter from "./vault";
 import socialRouter from "./social";
 import uploadsRouter from "./uploads";
@@ -35,7 +34,6 @@ const router: IRouter = Router();
 
 // All routes are PUBLIC — login has been removed per operator directive.
 router.use(healthRouter);
-router.use(authRouter);
 router.use(externalRouter);
 router.use(worldRouter);
 router.use(n8nRouter);

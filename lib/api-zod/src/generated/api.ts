@@ -317,41 +317,6 @@ export const ResumeSwarmResponse = zod.object({
 
 
 /**
- * @summary Sign in as an operator (sets an HttpOnly session cookie)
- */
-export const LoginBody = zod.object({
-  "username": zod.string(),
-  "password": zod.string()
-})
-
-export const LoginResponse = zod.object({
-  "authenticated": zod.boolean(),
-  "username": zod.string().optional(),
-  "displayName": zod.string().optional()
-})
-
-
-/**
- * @summary Sign out (clears the session cookie)
- */
-export const LogoutResponse = zod.object({
-  "authenticated": zod.boolean(),
-  "username": zod.string().optional(),
-  "displayName": zod.string().optional()
-})
-
-
-/**
- * @summary Whether the caller holds a valid operator session
- */
-export const GetAuthStatusResponse = zod.object({
-  "authenticated": zod.boolean(),
-  "username": zod.string().optional(),
-  "displayName": zod.string().optional()
-})
-
-
-/**
  * @summary List official social platforms, their docs/console URLs, and live connection status
  */
 export const ListSocialPlatformsResponseItem = zod.object({
