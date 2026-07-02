@@ -50,6 +50,7 @@ import { embed, embeddingsConfigured, cosineSimilarity, parseEmbedding } from ".
 import { pineconeConfigured, pineconeUpsert, pineconeQuery } from "./lib/pinecone";
 import { runInSandbox, repoPr, sandboxConfigured, gitWriteConfigured } from "./lib/sandbox";
 import { TIER1_SOURCES, tier1SourcesText } from "./lib/sources";
+import { a2eConfigured, a2eImage, a2eTextToVideo } from "./lib/a2e";
 import { marketingPlaybook, MARKETING_SECTIONS } from "./lib/marketing";
 import { computeNextRun } from "./lib/cron";
 import { blockIfSensitiveForPublic } from "./lib/safety";
@@ -1187,7 +1188,7 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
   image_generate: {
     name: "image_generate",
     description:
-      "Generate an IMAGE from a text prompt and save it as a downloadable file; returns a markdown image preview plus a download link. Use whenever the operator asks for an image, picture, logo, illustration, diagram, icon, mockup, poster, or banner. Needs OPENAI_API_KEY (or IMAGE_API_KEY).",
+      "Generate an IMAGE from a text prompt and save it as a downloadable file; returns a markdown image preview plus a download link. Use whenever the operator asks for an image, picture, logo, illustration, diagram, icon, mockup, poster, or banner. Backed by A2E (a2e.ai) when A2E_API_KEY is set, otherwise OpenAI gpt-image-1 (OPENAI_API_KEY / IMAGE_API_KEY).",
     parameters: {
       type: "object",
       properties: {
@@ -1198,10 +1199,30 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
       required: ["prompt"],
     },
     run: async (args) => {
-      const apiKey = process.env["OPENAI_API_KEY"] || process.env["IMAGE_API_KEY"];
-      if (!apiKey) return "error: image generation is not configured (set OPENAI_API_KEY).";
       const prompt = String(args["prompt"] ?? "").trim();
       if (!prompt) return "error: prompt is required.";
+
+      // Preferred path: A2E (a2e.ai) text-to-image. Falls through to OpenAI on
+      // any A2E failure so a transient A2E issue never blocks image generation.
+      if (a2eConfigured()) {
+        try {
+          const res = await a2eImage(prompt);
+          const ext = res.mime.includes("jpeg") ? "jpg" : res.mime.includes("webp") ? "webp" : "png";
+          const b64 = res.buffer.toString("base64");
+          const filename = (args["filename"] != null ? String(args["filename"]) : prompt.slice(0, 40).replace(/[^a-z0-9]+/gi, "_")).replace(/\.(png|jpg|jpeg|webp)$/i, "") + "." + ext;
+          const [row] = await db
+            .insert(attachmentsTable)
+            .values({ filename, mimeType: res.mime, kind: "image", sizeBytes: res.buffer.length, data: b64, extractedText: null })
+            .returning();
+          const url = uploadUrl(row.id);
+          return `generated image "${filename}" (${res.buffer.length} bytes) via A2E. Its PUBLIC image URL (use this directly as image_url when posting to Instagram/social, or as the link in your answer):\n${url}\n\nShow it in your answer:\n![${prompt.slice(0, 60)}](${url})\n[Download ${filename}](${url}?download=1)`;
+        } catch (e) {
+          logger.warn({ err: String(e) }, "image_generate: A2E failed, falling back to OpenAI");
+        }
+      }
+
+      const apiKey = process.env["OPENAI_API_KEY"] || process.env["IMAGE_API_KEY"];
+      if (!apiKey) return "error: image generation is not configured (set A2E_API_KEY or OPENAI_API_KEY).";
       const allowed = new Set(["1024x1024", "1536x1024", "1024x1536"]);
       const size = allowed.has(String(args["size"])) ? String(args["size"]) : "1024x1024";
       const base = (process.env["IMAGE_BASE_URL"] ?? "https://api.openai.com/v1").replace(/\/$/, "");
@@ -1235,6 +1256,39 @@ export const TOOL_REGISTRY: Record<string, ToolDef> = {
         return `error: image generation failed: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
       } finally {
         clearTimeout(timer);
+      }
+    },
+  },
+
+  video_generate: {
+    name: "video_generate",
+    description:
+      "Generate a VIDEO from a text prompt and save it as a downloadable file; returns a markdown video link + download link. Use whenever the operator asks for a video, clip, animation, or motion asset (the 'Video' mode). Backed by A2E (a2e.ai): it renders an image from the prompt, then animates it. Rendering takes a few minutes. Needs A2E_API_KEY.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: { type: "string", description: "What the video should show — describe the scene/motion in detail." },
+        filename: { type: "string", description: "Optional output filename, e.g. 'clip.mp4'." },
+      },
+      required: ["prompt"],
+    },
+    run: async (args) => {
+      if (!a2eConfigured()) return "error: video generation is not configured (set A2E_API_KEY — a2e.ai).";
+      const prompt = String(args["prompt"] ?? "").trim();
+      if (!prompt) return "error: prompt is required.";
+      try {
+        const res = await a2eTextToVideo(prompt);
+        const ext = res.mime.includes("webm") ? "webm" : res.mime.includes("quicktime") ? "mov" : "mp4";
+        const b64 = res.buffer.toString("base64");
+        const filename = (args["filename"] != null ? String(args["filename"]) : prompt.slice(0, 40).replace(/[^a-z0-9]+/gi, "_")).replace(/\.(mp4|mov|webm|m4v)$/i, "") + "." + ext;
+        const [row] = await db
+          .insert(attachmentsTable)
+          .values({ filename, mimeType: res.mime, kind: "video", sizeBytes: res.buffer.length, data: b64, extractedText: null })
+          .returning();
+        const url = uploadUrl(row.id);
+        return `generated video "${filename}" (${res.buffer.length} bytes) via A2E. Its PUBLIC video URL:\n${url}\n\nShow it in your answer:\n[▶ ${prompt.slice(0, 60)}](${url})\n[Download ${filename}](${url}?download=1)`;
+      } catch (e) {
+        return `error: video generation failed: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
       }
     },
   },
@@ -1922,11 +1976,11 @@ const ALL_TOOLS = Object.keys(TOOL_REGISTRY);
 
 export const AGENT_TOOLS: Record<number, string[]> = {
   1: ALL_TOOLS, // ABBY — full authority
-  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "do_exec", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-1 — code + persistent workspace
-  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "jina_read", "deep_research", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-2 — browser
-  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "jina_read", "deep_research", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-3 — memory/RAG
-  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "send_email", "text_to_speech", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-4 — APIs + scheduling
-  6: ["web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "send_email", "send_sms", "save_artifact", "image_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-5 — social
+  2: ["code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "do_exec", "calculator", "http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "memory_search", "memory_write", "vault_list", "save_artifact", "image_generate", "video_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-1 — code + persistent workspace
+  3: ["web_scrape", "web_screenshot", "web_search", "tier1_sources", "jina_read", "deep_research", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "save_artifact", "image_generate", "video_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-2 — browser
+  4: ["memory_write", "memory_search", "web_search", "tier1_sources", "jina_read", "deep_research", "web_scrape", "http_request", "calculator", "vault_list", "save_artifact", "image_generate", "video_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-3 — memory/RAG
+  5: ["http_request", "web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "code_exec", "cloud_code_exec", "sandbox_exec", "sandbox_repo_pr", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "schedule_task", "list_scheduled_tasks", "cancel_scheduled_task", "send_email", "text_to_speech", "send_sms", "save_artifact", "image_generate", "video_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-4 — APIs + scheduling
+  6: ["web_scrape", "web_search", "tier1_sources", "jina_read", "deep_research", "marketing_playbook", "http_request", "calculator", "memory_search", "memory_write", "vault_list", "social_accounts", "social_api", "composio_apps", "composio_action", "instagram_post", "send_email", "send_sms", "save_artifact", "image_generate", "video_generate", "send_message", "swarm_broadcast", "swarm_read", "scratch_write"], // AURA-5 — social
 };
 
 export function getToolNamesForAgent(agentId: number): string[] {
@@ -1971,7 +2025,10 @@ export function buildCapabilityCard(agentId: number): string {
     card += `\n\nDELIVERABLE FILES: whenever you produce a file the operator should keep (report, CSV, code, JSON, or a generated PDF), call save_artifact to store it and get a real download URL, then put that [Download …](url) link in your final answer. Do NOT claim a file exists or name a file you didn't save — an unsaved file is not downloadable and counts as a fabrication. To make a PDF: generate it in sandbox_exec (reportlab/fpdf2), base64 it, then save_artifact with encoding 'base64'.`;
   }
   if (names.includes("image_generate")) {
-    card += `\n\nIMAGES: prefer the CHEAP path first. For news/quote/hook/stat cards and any terminal/cyber TEXT visual, call render_card — it draws a real on-brand 1080×1080 PNG by code for ~$0 (no AI image gen) and returns a public image URL. Only call image_generate (paid) when you specifically need a PHOTOREAL picture/logo/illustration/photo. Either way you get a real PNG + a URL to use as image_url; do NOT hand-code SVG or merely describe the image, and only produce SVG if the operator explicitly asks for SVG/vector.`;
+    card += `\n\nIMAGES: prefer the CHEAP path first. For news/quote/hook/stat cards and any terminal/cyber TEXT visual, call render_card — it draws a real on-brand 1080×1080 PNG by code for ~$0 (no AI image gen) and returns a public image URL. Only call image_generate when you specifically need a PHOTOREAL picture/logo/illustration/photo. Either way you get a real PNG + a URL to use as image_url; do NOT hand-code SVG or merely describe the image, and only produce SVG if the operator explicitly asks for SVG/vector.`;
+  }
+  if (names.includes("video_generate")) {
+    card += `\n\nVIDEO: when the operator asks for a video/clip/animation (the 'Video' mode), call video_generate with a detailed prompt. It renders a real MP4 via A2E and returns a public URL + download link — put that link in your answer. Rendering takes a few minutes; that's expected. NEVER say "video generation is not a tool I have" — it is (video_generate). Do not fake it with a storyboard unless video_generate errors.`;
   }
   if (names.includes("composio_apps") || names.includes("composio_action")) {
     card += `\n\nCONNECTED APPS (Composio): the operator connects their apps — social like Instagram/YouTube/Reddit AND SaaS like Gmail/GitHub/Notion/Calendar/Sheets — in Settings → Connect Apps, which is COMPOSIO. To act on any of them, FIRST call composio_apps to see which are LIVE, THEN call composio_action on a live app. For a read with no obvious named action slug, use composio_action RAW PROXY mode: pass toolkit + endpoint (the app's REST path) + method, e.g. toolkit:'instagram', endpoint:'/me/media?fields=id,caption', method:'GET'.`;

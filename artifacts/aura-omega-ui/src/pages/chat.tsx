@@ -37,8 +37,8 @@ const MODES: Array<{ id: ComposerMode; label: string }> = [
 const MODE_DIRECTIVE: Record<ComposerMode, string> = {
   chat: "",
   code: "\n\n(Operator mode: CODE — treat this as a hands-on coding task: write or edit real code with your tools, run it, verify it works, and report evidence.)",
-  image: "\n\n(Operator mode: IMAGE — generate the requested image with your image tools and return it inline in this channel.)",
-  video: "\n\n(Operator mode: VIDEO — produce the requested video asset with your tools; if video generation isn't available, say so plainly and deliver the closest real alternative, e.g. a storyboard with generated stills.)",
+  image: "\n\n(Operator mode: IMAGE — call the image_generate tool with a detailed prompt and return the generated image inline in this channel.)",
+  video: "\n\n(Operator mode: VIDEO — call the video_generate tool with a detailed prompt; it renders a real MP4 via A2E and returns a public URL + download link. Rendering takes a few minutes — that's expected. Return the video link inline. Only fall back to a storyboard of stills if video_generate actually errors.)",
   vision: "\n\n(Operator mode: VISION — analyze the attached image(s) in detail and answer based on what you actually see.)",
 };
 

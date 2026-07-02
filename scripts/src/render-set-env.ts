@@ -37,6 +37,9 @@ const MANAGED_KEYS = [
   "CF_WORKERS_AI_PRIMARY",
   "CF_WORKERS_AI_TOKEN",
   "CF_WORKERS_ACCOUNT_ID",
+  // A2E (a2e.ai) — image + video generation for the Image/Video modes
+  "A2E_API_KEY",
+  "A2E_BASE_URL",
   "OPENROUTER_API_KEY",
   "STEEL_API_KEY",
   "FIRECRAWL_API_KEY",
