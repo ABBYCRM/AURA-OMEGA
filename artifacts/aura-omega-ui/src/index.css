@@ -54,40 +54,40 @@
   --app-font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --app-font-serif: 'Inter', Georgia, serif;
   --app-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --radius: 0.75rem;
+  --radius: 1rem;
 }
 
-/* ── LIGHT MODE (default) ────────────────────────────────────────────────── */
+/* ── LIGHT MODE (default) — Claw Code warm cream + coral ────────────────── */
 :root {
-  --background: 220 30% 96%;
-  --foreground: 222 30% 12%;
+  --background: 47 20% 93%;
+  --foreground: 40 8% 14%;
 
-  --card: 0 0% 100%;
-  --card-foreground: 222 30% 12%;
-  --card-border: 220 15% 88%;
+  --card: 47 25% 97%;
+  --card-foreground: 40 8% 14%;
+  --card-border: 45 14% 85%;
 
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 30% 12%;
-  --popover-border: 220 15% 86%;
+  --popover: 47 25% 98%;
+  --popover-foreground: 40 8% 14%;
+  --popover-border: 45 14% 84%;
 
-  --primary: 258 80% 58%;
+  --primary: 14 66% 56%;
   --primary-foreground: 0 0% 100%;
 
-  --secondary: 220 18% 92%;
-  --secondary-foreground: 222 24% 22%;
+  --secondary: 46 16% 89%;
+  --secondary-foreground: 40 8% 22%;
 
-  --muted: 220 18% 94%;
-  --muted-foreground: 220 10% 50%;
+  --muted: 46 16% 90%;
+  --muted-foreground: 40 6% 45%;
 
-  --accent: 190 72% 42%;
+  --accent: 14 66% 56%;
   --accent-foreground: 0 0% 100%;
 
-  --destructive: 0 72% 51%;
+  --destructive: 6 68% 48%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 220 15% 86%;
-  --input: 220 15% 90%;
-  --ring: 258 80% 58%;
+  --border: 45 14% 85%;
+  --input: 45 14% 88%;
+  --ring: 14 66% 56%;
 
   --sidebar-primary-border: hsl(var(--primary));
   --sidebar-accent-border: hsl(var(--accent));
@@ -98,45 +98,45 @@
   --destructive-border: hsl(var(--destructive));
 
   /* 3D button depth tokens */
-  --btn-primary-face:   hsl(258 70% 44%);
-  --btn-primary-glow:   rgba(139, 92, 246, 0.30);
-  --btn-white-face:     hsl(220 15% 76%);
-  --btn-white-glow:     rgba(0, 0, 0, 0.10);
+  --btn-primary-face:   hsl(14 62% 42%);
+  --btn-primary-glow:   rgba(226, 96, 60, 0.28);
+  --btn-white-face:     hsl(45 12% 78%);
+  --btn-white-glow:     rgba(60, 50, 30, 0.10);
   --btn-emerald-face:   hsl(152 60% 32%);
   --btn-emerald-glow:   rgba(16, 185, 129, 0.25);
 }
 
-/* ── DARK MODE ───────────────────────────────────────────────────────────── */
+/* ── DARK MODE — Claw Code warm near-black ──────────────────────────────── */
 .dark {
-  --background: 222 24% 7%;
-  --foreground: 220 25% 96%;
+  --background: 60 3% 9%;
+  --foreground: 45 8% 92%;
 
-  --card: 224 21% 11%;
-  --card-foreground: 220 25% 96%;
-  --card-border: 225 16% 23%;
+  --card: 60 3% 14%;
+  --card-foreground: 45 8% 92%;
+  --card-border: 50 4% 24%;
 
-  --popover: 224 22% 10%;
-  --popover-foreground: 220 25% 96%;
-  --popover-border: 225 16% 24%;
+  --popover: 60 3% 13%;
+  --popover-foreground: 45 8% 92%;
+  --popover-border: 50 4% 25%;
 
-  --primary: 258 86% 68%;
-  --primary-foreground: 255 45% 98%;
+  --primary: 16 68% 64%;
+  --primary-foreground: 20 30% 10%;
 
-  --secondary: 223 17% 18%;
-  --secondary-foreground: 220 20% 92%;
+  --secondary: 55 3% 19%;
+  --secondary-foreground: 45 8% 88%;
 
-  --muted: 224 17% 16%;
-  --muted-foreground: 219 13% 70%;
+  --muted: 55 3% 17%;
+  --muted-foreground: 45 5% 64%;
 
-  --accent: 190 82% 56%;
-  --accent-foreground: 0 0% 100%;
+  --accent: 16 68% 64%;
+  --accent-foreground: 20 30% 10%;
 
-  --destructive: 0 70% 57%;
+  --destructive: 4 70% 58%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 220 13% 22%;
-  --input: 220 13% 24%;
-  --ring: 258 86% 68%;
+  --border: 50 4% 23%;
+  --input: 50 4% 25%;
+  --ring: 16 68% 64%;
 
   --sidebar-primary-border: hsl(var(--primary));
   --sidebar-accent-border: hsl(var(--accent));
@@ -146,9 +146,9 @@
   --accent-border: hsl(var(--accent));
   --destructive-border: hsl(var(--destructive));
 
-  --btn-primary-face:   hsl(258 60% 44%);
-  --btn-primary-glow:   rgba(139, 92, 246, 0.35);
-  --btn-white-face:     hsl(224 17% 8%);
+  --btn-primary-face:   hsl(16 55% 42%);
+  --btn-primary-glow:   rgba(232, 130, 94, 0.22);
+  --btn-white-face:     hsl(60 3% 6%);
   --btn-white-glow:     rgba(0, 0, 0, 0.30);
   --btn-emerald-face:   hsl(152 55% 24%);
   --btn-emerald-glow:   rgba(16, 185, 129, 0.20);
@@ -165,10 +165,7 @@
 
   body {
     @apply font-sans antialiased bg-background text-foreground;
-    background:
-      radial-gradient(ellipse at 10% 0%,   hsl(258 60% 96%) 0%, transparent 50%),
-      radial-gradient(ellipse at 90% 100%, hsl(190 50% 95%) 0%, transparent 50%),
-      hsl(var(--background));
+    background: hsl(var(--background));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     line-height: 1.6;
@@ -176,10 +173,7 @@
   }
 
   .dark body {
-    background:
-      radial-gradient(circle at 15% 8%,  rgba(139, 92, 246, 0.14), transparent 28rem),
-      radial-gradient(circle at 85% 10%, rgba(34, 211, 238, 0.08),  transparent 30rem),
-      linear-gradient(180deg, hsl(222 24% 7%), hsl(226 28% 5%));
+    background: hsl(var(--background));
   }
 
   .uppercase {
@@ -308,25 +302,27 @@
     caret-color: hsl(var(--primary));
   }
 
-  /* ── Chat bubbles ──────────────────────────────────────────────────────── */
+  /* ── Chat bubbles — Claw Code: user text sits in a soft warm card ──────── */
   .chat-bubble-user {
-    background: linear-gradient(135deg, hsl(258 86% 62%), hsl(258 80% 55%));
-    color: hsl(var(--primary-foreground));
-    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl);
+    background: hsl(var(--muted));
+    color: hsl(var(--foreground));
+    border: 1px solid hsl(var(--border) / 0.6);
+    border-radius: calc(var(--radius) + 4px);
     box-shadow:
-      0 1px 0 rgba(255,255,255,0.20) inset,
-      0 4px 12px rgba(139, 92, 246, 0.30);
+      0 1px 0 rgba(255,255,255,0.55) inset,
+      0 2px 8px rgba(60, 50, 30, 0.05);
+  }
+  .dark .chat-bubble-user {
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 2px 8px rgba(0,0,0,0.20);
   }
 
   .chat-bubble-agent {
-    background: hsl(var(--card));
-    border: 1px solid hsl(var(--border));
-    border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xl) var(--radius-sm);
-    box-shadow:
-      0 1px 0 rgba(255,255,255,0.90) inset,
-      0 2px 8px rgba(0,0,0,0.06);
+    background: transparent;
+    border: none;
+    border-radius: calc(var(--radius) + 4px);
+    box-shadow: none;
   }
   .dark .chat-bubble-agent {
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: none;
   }
 }

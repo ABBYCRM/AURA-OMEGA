@@ -11,16 +11,46 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAiStream } from "@/hooks/useAiStream";
-import { GOAL_DRAFT_KEY } from "@/lib/handoff";
+import { GOAL_DRAFT_KEY, takeChatSetup, type ComposerMode } from "@/lib/handoff";
+import { openAppDrawer } from "@/components/layout/AppLayout";
 import { MessageContent } from "@/components/chat/MessageContent";
 import { WhatsNewButton } from "@/components/WhatsNew";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
-  Plus, Send, Paperclip, X, Download, Check,
+  Plus, Paperclip, X, Check, Menu, ArrowRight, Asterisk,
   Bot, AlertTriangle, Loader2, Sparkles, Copy, Volume2, Square, Mic, Rocket,
   ChevronDown, ChevronUp, Brain,
 } from "lucide-react";
+
+// ── Composer modes (Claw-style pills) ────────────────────────────────────────
+// The persisted user message stays clean; the mode adds an explicit operator
+// directive to what the model receives, steering routing/tool choice.
+const MODES: Array<{ id: ComposerMode; label: string }> = [
+  { id: "chat",   label: "Chat" },
+  { id: "code",   label: "Code" },
+  { id: "image",  label: "Image" },
+  { id: "video",  label: "Video" },
+  { id: "vision", label: "Vision" },
+];
+
+const MODE_DIRECTIVE: Record<ComposerMode, string> = {
+  chat: "",
+  code: "\n\n(Operator mode: CODE — treat this as a hands-on coding task: write or edit real code with your tools, run it, verify it works, and report evidence.)",
+  image: "\n\n(Operator mode: IMAGE — generate the requested image with your image tools and return it inline in this channel.)",
+  video: "\n\n(Operator mode: VIDEO — produce the requested video asset with your tools; if video generation isn't available, say so plainly and deliver the closest real alternative, e.g. a storyboard with generated stills.)",
+  vision: "\n\n(Operator mode: VISION — analyze the attached image(s) in detail and answer based on what you actually see.)",
+};
+
+const MODE_PLACEHOLDER: Record<ComposerMode, string> = {
+  chat: "Message AURA-OMEGA…",
+  code: "Describe the coding task…",
+  image: "Describe the image to generate…",
+  video: "Describe the video to produce…",
+  vision: "Attach an image and ask about it…",
+};
+
+interface AgentOption { id: number; name: string; }
 
 // Uploaded to /api/uploads on pick; images are rendered inline and sent to ABBY
 // as vision input, text files have their text read by the agent.
@@ -125,6 +155,36 @@ export default function ChatPage() {
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [uploading, setUploading] = useState(false);
   const [listening, setListening] = useState(false);
+  const [mode, setMode] = useState<ComposerMode>("chat");
+  // null = Auto (ABBY routes to the right agent). Otherwise a fixed agent id.
+  const [agentSel, setAgentSel] = useState<number | null>(null);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+
+  // Real swarm roster for the engine selector.
+  useEffect(() => {
+    let alive = true;
+    fetch(resolveApiUrl("/api/agents"))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((list) => {
+        if (alive && Array.isArray(list)) {
+          setAgents(list.map((a: { id: number; name: string }) => ({ id: a.id, name: a.name })));
+        }
+      })
+      .catch(() => { /* selector just shows Auto */ });
+    return () => { alive = false; };
+  }, []);
+
+  // Mode/agent handed off from the All Agents hub.
+  useEffect(() => {
+    const setup = takeChatSetup();
+    if (setup?.mode) setMode(setup.mode);
+    if (setup?.agentId !== undefined) setAgentSel(setup.agentId);
+  }, []);
+
+  const engineName = agentSel == null
+    ? "Auto — ABBY routes"
+    : agents.find((a) => a.id === agentSel)?.name ?? `Agent ${agentSel}`;
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -271,10 +331,11 @@ export default function ChatPage() {
       {
         onSuccess: () => {
           qc.invalidateQueries({ queryKey: getListMessagesQueryKey(activeId) });
-          // The model gets the original text plus the attachment id (vision/text).
+          // The model gets the original text plus the mode directive and the
+          // attachment id (vision/text). The persisted message stays clean.
           ai.send({
-            message: body || "(see attached file)",
-            agentId: null,
+            message: (body || "(see attached file)") + MODE_DIRECTIVE[mode],
+            agentId: agentSel,
             channelId: activeId,
             attachmentIds: att ? [att.id] : undefined,
           });
@@ -365,32 +426,73 @@ export default function ChatPage() {
     <div className="flex w-full h-full bg-background text-foreground overflow-hidden">
       {/* ── Main column ── */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top bar */}
-        <header className="h-14 shrink-0 border-b border-card-border flex items-center gap-2 sm:gap-3 px-3 sm:px-4">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <Bot className="w-4 h-4 sm:w-5 sm:h-5 text-primary shrink-0" />
-            <div className="min-w-0">
-              <h1 className="text-sm font-semibold truncate">{activeChannel?.name ?? "AURA-OMEGA"}</h1>
-              <p className="text-[11px] text-muted-foreground truncate hidden sm:block">UI → AURA-OMEGA → governed tools → verified result</p>
-            </div>
+        {/* Top bar — Claw style: hamburger · engine selector · copy */}
+        <header className="h-16 shrink-0 flex items-center gap-2 sm:gap-3 px-3 sm:px-4">
+          <button
+            onClick={openAppDrawer}
+            aria-label="Open menu"
+            className="lg:hidden w-11 h-11 rounded-xl bg-card border border-card-border flex items-center justify-center text-foreground shrink-0"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+
+          {/* Engine (agent) selector pill */}
+          <div className="relative min-w-0">
+            <button
+              onClick={() => setAgentMenuOpen((v) => !v)}
+              aria-label="Select engine"
+              className="flex items-center gap-2 rounded-xl bg-card border border-card-border px-4 min-h-[44px] text-sm font-bold max-w-[60vw] sm:max-w-xs"
+            >
+              <span className="truncate">{engineName}</span>
+              <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
+            </button>
+            {agentMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setAgentMenuOpen(false)} />
+                <div className="absolute left-0 mt-1 w-64 rounded-xl border border-card-border bg-popover shadow-xl z-20 overflow-hidden">
+                  <button
+                    onClick={() => { setAgentSel(null); setAgentMenuOpen(false); }}
+                    className={cn("w-full text-left px-3 py-2.5 text-sm hover:bg-muted", agentSel == null && "font-bold text-primary")}
+                  >
+                    Auto — ABBY routes
+                    <span className="block text-[11px] text-muted-foreground font-normal">Best agent picked per message</span>
+                  </button>
+                  {agents.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => { setAgentSel(a.id); setAgentMenuOpen(false); }}
+                      className={cn("w-full text-left px-3 py-2.5 text-sm hover:bg-muted", agentSel === a.id && "font-bold text-primary")}
+                    >
+                      {a.name}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
+
+          <div className="flex-1 min-w-0 hidden sm:block">
+            <h1 className="text-sm font-semibold truncate text-muted-foreground">{activeChannel?.name ?? ""}</h1>
+          </div>
+          <div className="flex-1 sm:hidden" />
+
           <BridgePill status={bridgeStatus} />
           <WhatsNewButton />
           <div className="relative">
             <button
               onClick={() => setExportOpen((v) => !v)}
-              aria-label="Export conversation"
-              className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-card-border/50 transition-colors"
+              aria-label="Copy or export conversation"
+              className="w-11 h-11 rounded-xl bg-card border border-card-border flex items-center justify-center text-foreground"
             >
-              <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export</span>
+              <Copy className="w-4 h-4" />
             </button>
             {exportOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
-                <div className="absolute right-0 mt-1 w-44 rounded-lg border border-card-border bg-popover shadow-xl z-20 overflow-hidden">
-                  <button onClick={() => { copyThread(); setExportOpen(false); }} className="w-full text-left px-3 py-2 text-sm hover:bg-card-border/50">Copy thread</button>
-                  <button onClick={() => exportConvo("txt")} className="w-full text-left px-3 py-2 text-sm hover:bg-card-border/50">Download .txt</button>
-                  <button onClick={() => exportConvo("json")} className="w-full text-left px-3 py-2 text-sm hover:bg-card-border/50">Download .json</button>
+                <div className="absolute right-0 mt-1 w-44 rounded-xl border border-card-border bg-popover shadow-xl z-20 overflow-hidden">
+                  <button onClick={() => { copyThread(); setExportOpen(false); }} className="w-full text-left px-3 py-2 text-sm hover:bg-muted">Copy thread</button>
+                  <button onClick={() => exportConvo("txt")} className="w-full text-left px-3 py-2 text-sm hover:bg-muted">Download .txt</button>
+                  <button onClick={() => exportConvo("json")} className="w-full text-left px-3 py-2 text-sm hover:bg-muted">Download .json</button>
                 </div>
               </>
             )}
@@ -421,9 +523,9 @@ export default function ChatPage() {
             {/* Live streaming reply */}
             {ai.streaming && (
               <div className="flex gap-3">
-                <Avatar name={ai.agentName ?? "ABBY"} color="#22d3ee" />
+                <Avatar name={ai.agentName ?? "ABBY"} />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-semibold text-cyan-500 mb-1">{ai.agentName ?? "ABBY"}</div>
+                  <div className="text-[13px] font-bold mb-1 mt-1.5">{ai.agentName ?? "ABBY"}</div>
                   {ai.tokens ? (
                     <div className="chat-bubble-agent px-4 py-3 text-sm leading-relaxed">
                       <MessageContent content={ai.tokens} />
@@ -442,9 +544,9 @@ export default function ChatPage() {
                 still running — surface that via the scratchpad's own recency signal. */}
             {!ai.streaming && swarmActive && (
               <div className="flex gap-3">
-                <Avatar name="ABBY" color="#22d3ee" />
+                <Avatar name="ABBY" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-[12px] font-semibold text-cyan-500 mb-1">ABBY</div>
+                  <div className="text-[13px] font-bold mb-1 mt-1.5">ABBY</div>
                   <div className="chat-bubble-agent px-4 py-3">
                     <ThinkingIndicator label="Swarm is still working" />
                   </div>
@@ -487,28 +589,32 @@ export default function ChatPage() {
                 </button>
               </div>
             )}
-            <div className="flex items-end gap-2 rounded-2xl border border-border bg-card shadow-sm px-3 py-2 focus-within:border-primary/60 focus-within:shadow-[0_0_0_3px_rgba(139,92,246,0.10)] transition-all">
-              <input ref={fileRef} type="file" className="hidden" onChange={onPickFile} aria-hidden="true" />
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={activeId == null || uploading}
-                aria-label="Attach a file"
-                className="p-2 text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
-              >
-                {uploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Paperclip className="w-5 h-5" />}
-              </button>
-              <button
-                onClick={toggleVoice}
-                disabled={activeId == null}
-                aria-label={listening ? "Stop voice input" : "Speak your message"}
-                title={listening ? "Listening… click to stop" : "Speak your message"}
-                className={cn(
-                  "p-2 transition-colors disabled:opacity-40",
-                  listening ? "text-[#ff2d78]" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Mic className={cn("w-5 h-5", listening && "animate-pulse")} />
-              </button>
+            <div className="rounded-3xl border border-primary/25 bg-card shadow-sm px-3 pt-3 pb-2.5 focus-within:border-primary/50 transition-all">
+              {/* Mode pills */}
+              <div className="flex items-center gap-2 pb-2 overflow-x-auto">
+                {MODES.map((m) => {
+                  const active = mode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => {
+                        setMode(m.id);
+                        // Vision is about an image — open the picker if none attached yet.
+                        if (m.id === "vision" && !attachment && !uploading) fileRef.current?.click();
+                      }}
+                      className={cn(
+                        "rounded-full px-4 min-h-[40px] text-sm font-bold transition-colors border shrink-0",
+                        active
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-card text-muted-foreground border-card-border hover:text-foreground",
+                      )}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+
               <textarea
                 ref={taRef}
                 value={text}
@@ -517,29 +623,58 @@ export default function ChatPage() {
                 rows={1}
                 disabled={activeId == null}
                 aria-label="Message"
-                placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : "Describe a mission for AURA-OMEGA…"}
-                className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-[200px]"
+                placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : MODE_PLACEHOLDER[mode]}
+                className="w-full resize-none bg-transparent py-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-[200px]"
               />
-              <button
-                onClick={launchAsMission}
-                disabled={!text.trim() || activeId == null || ai.streaming || uploading}
-                aria-label="Launch as mission"
-                title="Send this goal to the Mission Kernel (event-driven execution loop). Tracks progress, retries, and final state on /missions."
-                className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-              >
-                <Rocket className="w-5 h-5" />
-              </button>
-              <button
-                onClick={send}
-                disabled={(!text.trim() && !attachment) || activeId == null || ai.streaming || uploading}
-                aria-label="Send message"
-                className="p-2.5 rounded-xl bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:-translate-y-0.5 active:translate-y-0 transition-all shrink-0 shadow-[0_10px_28px_rgba(139,92,246,0.35),inset_0_1px_0_rgba(255,255,255,0.22)]"
-              >
-                {ai.streaming ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-              </button>
+
+              {/* Bottom row: attach · mic · engine line · mission · send */}
+              <div className="flex items-center gap-2 pt-1.5">
+                <input ref={fileRef} type="file" className="hidden" onChange={onPickFile} aria-hidden="true" />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={activeId == null || uploading}
+                  aria-label="Attach a file"
+                  className="w-10 h-10 rounded-xl bg-muted border border-card-border flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors shrink-0"
+                >
+                  {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Paperclip className="w-4 h-4" />}
+                </button>
+                <button
+                  onClick={toggleVoice}
+                  disabled={activeId == null}
+                  aria-label={listening ? "Stop voice input" : "Speak your message"}
+                  title={listening ? "Listening… click to stop" : "Speak your message"}
+                  className={cn(
+                    "w-10 h-10 rounded-xl bg-muted border border-card-border flex items-center justify-center transition-colors disabled:opacity-40 shrink-0",
+                    listening ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Mic className={cn("w-4 h-4", listening && "animate-pulse")} />
+                </button>
+                <span className="text-sm text-muted-foreground truncate min-w-0">
+                  Engine: {engineName}
+                </span>
+                <div className="flex-1" />
+                <button
+                  onClick={launchAsMission}
+                  disabled={!text.trim() || activeId == null || ai.streaming || uploading}
+                  aria-label="Launch as mission"
+                  title="Send this goal to the Mission Kernel (event-driven execution loop). Tracks progress, retries, and final state on /missions."
+                  className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 flex items-center justify-center hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+                >
+                  <Rocket className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={send}
+                  disabled={(!text.trim() && !attachment) || activeId == null || ai.streaming || uploading}
+                  aria-label="Send message"
+                  className="w-11 h-11 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0"
+                >
+                  {ai.streaming ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowRight className="w-5 h-5" />}
+                </button>
+              </div>
             </div>
-            <p className="text-[10px] text-muted-foreground/40 text-center mt-2 select-none">
-              UI → BOS Governor → tool router → verified result
+            <p className="text-[11px] text-muted-foreground/60 text-center mt-2 select-none">
+              AURA-OMEGA can make mistakes. Verify important information.
             </p>
           </div>
         </div>
@@ -656,26 +791,53 @@ function BridgePill({ status }: { status: { enabled: boolean; tokenConfigured: b
   );
 }
 
-function Avatar({ name, color }: { name: string; color: string }) {
-  const initials = name.split(/[\s.]+/).slice(0, 2).map((s) => s[0]).join("").toUpperCase();
+// Claw-style avatars: soft square chips. The swarm gets the coral asterisk;
+// the operator gets a muted "U".
+function Avatar({ name }: { name: string; color?: string }) {
+  if (name === "You") {
+    return (
+      <div className="w-9 h-9 rounded-xl shrink-0 flex items-center justify-center text-[13px] font-bold bg-muted border border-card-border text-muted-foreground">
+        U
+      </div>
+    );
+  }
   return (
-    <div
-      className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-bold shadow-sm"
-      style={{ backgroundColor: `${color}20`, color, border: `1.5px solid ${color}50` }}
-    >
-      {initials || "AI"}
+    <div className="w-9 h-9 rounded-xl shrink-0 flex items-center justify-center bg-primary text-primary-foreground shadow-sm">
+      <Asterisk className="w-5 h-5" strokeWidth={2.5} />
     </div>
+  );
+}
+
+// Copy button rendered under user messages (Claw pattern).
+function CopyChip({ content }: { content: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard?.writeText(content).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-card border border-card-border px-3 py-1.5 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 
 function MessageRow({ message: m }: { message: { messageType: string; content: string; agentName?: string | null; agentColor?: string | null; timestamp?: string } }) {
   if (m.messageType === "user") {
     return (
-      <div className="flex justify-end gap-2 group">
-        <div className="max-w-[88%] sm:max-w-[78%]">
-          <div className="chat-bubble-user px-4 py-3 text-sm leading-relaxed shadow-sm">
+      <div className="flex gap-3 group">
+        <Avatar name="You" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-bold mb-1.5 mt-1.5">You</div>
+          <div className="chat-bubble-user px-4 py-3 text-sm leading-relaxed">
             <MessageContent content={m.content} />
           </div>
+          <CopyChip content={m.content} />
         </div>
       </div>
     );
@@ -724,7 +886,7 @@ function MessageRow({ message: m }: { message: { messageType: string; content: s
       <Avatar name={m.agentName || "Assistant"} color={color} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2 mb-1">
-          <span className="text-[12px] font-semibold" style={{ color }}>{m.agentName || "Assistant"}</span>
+          <span className="text-[13px] font-bold mt-1.5">{m.agentName || "AURA-OMEGA"}</span>
           {m.timestamp && (
             <span className="text-[10px] text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
               {new Date(m.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -813,14 +975,14 @@ function ThinkingIndicator({ label = "Thinking" }: { label?: string }) {
   }, []);
   return (
     <div className="flex items-center gap-2 py-1" aria-live="polite" aria-label={label}>
-      <Brain className="w-4 h-4 text-cyan-500 animate-pulse shrink-0" />
+      <Brain className="w-4 h-4 text-primary animate-pulse shrink-0" />
       <span className="text-sm text-muted-foreground">
         {label}
         {elapsed > 0 ? ` · ${elapsed}s` : ""}
       </span>
       <span className="flex items-center gap-1">
         {[0, 1, 2].map((i) => (
-          <span key={i} className="w-1.5 h-1.5 rounded-full bg-cyan-500/70 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+          <span key={i} className="w-1.5 h-1.5 rounded-full bg-primary/70 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
         ))}
       </span>
     </div>

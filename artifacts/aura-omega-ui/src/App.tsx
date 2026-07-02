@@ -13,6 +13,7 @@ import IntegrationsConsole from "@/pages/integrations-console";
 import RuntimesPage from "@/pages/runtimes";
 import ScheduledConsole from "@/pages/scheduled-console";
 import Agents from "@/pages/agents";
+import AgentsManage from "@/pages/agents-manage";
 import Tasks from "@/pages/tasks";
 import Settings from "@/pages/settings";
 import ScratchpadPage from "@/pages/scratchpad";
@@ -35,6 +36,7 @@ function Router() {
         {/* Legacy routes kept for backward compatibility. */}
         <Route path="/swarm" component={Dashboard} />
         <Route path="/agents" component={Agents} />
+        <Route path="/agents/manage" component={AgentsManage} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/scheduled" component={ScheduledConsole} />
         <Route path="/cron" component={CronPage} />

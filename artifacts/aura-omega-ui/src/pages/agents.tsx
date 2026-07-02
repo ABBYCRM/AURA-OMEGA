@@ -1,115 +1,163 @@
+/**
+ * All Agents — Claw-style launcher grid.
+ *
+ * Every tile is wired to a real capability: it picks the composer mode and/or
+ * drops a starter prompt into the chat (GOAL_DRAFT_KEY / CHAT_SETUP_KEY
+ * handoff), or deep-links to the surface that owns the feature. "Your Swarm"
+ * lists the live ABBY/AURA roster; Manage Swarm opens the full roster view
+ * with status + tools (the previous Agents page, now at /agents/manage).
+ */
+import { useLocation, Link } from "wouter";
 import { useListAgents } from "@workspace/api-client-react";
-import { AgentStatusDot } from "@/components/ui/agent-status-dot";
-import { Terminal, Cpu, Activity, AlertTriangle, RefreshCw } from "lucide-react";
+import { GOAL_DRAFT_KEY, setChatSetup, type ComposerMode } from "@/lib/handoff";
+import { openAppDrawer } from "@/components/layout/AppLayout";
+import {
+  ArrowLeft, Menu,
+  Presentation, Table, FileText,
+  MessageSquare, Image as ImageIcon, Clapperboard, Music, AudioLines, Scissors, Podcast,
+  NotebookPen, Languages, Bot, Telescope, BadgeCheck, Globe, Inbox,
+  PenTool, Code2, Rocket,
+} from "lucide-react";
 
-export default function Agents() {
-  const { data: agents = [], isLoading, isError, refetch } = useListAgents();
+interface Tile {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  mode?: ComposerMode;
+  draft?: string;
+  href?: string;
+}
+
+const SECTIONS: Array<{ title: string; tiles: Tile[] }> = [
+  {
+    title: "Office Suite",
+    tiles: [
+      { label: "AI Slides", icon: Presentation, draft: "Build a slide deck outline (title, per-slide bullets, speaker notes) about: " },
+      { label: "AI Sheets", icon: Table, draft: "Build a spreadsheet (CSV, with headers and real researched data) of: " },
+      { label: "AI Docs", icon: FileText, draft: "Write a complete, polished document about: " },
+    ],
+  },
+  {
+    title: "Content Creation",
+    tiles: [
+      { label: "AI Chat", icon: MessageSquare, mode: "chat" },
+      { label: "AI Image", icon: ImageIcon, mode: "image", draft: "Generate an image of: " },
+      { label: "AI Video", icon: Clapperboard, mode: "video", draft: "Produce a video for: " },
+      { label: "AI Music", icon: Music, draft: "Write structured song lyrics + a production brief (genre, BPM, instrumentation) for: " },
+      { label: "AI Audio", icon: AudioLines, draft: "Write a narration script, timed and ready to record, for: " },
+      { label: "Clip Genius", icon: Scissors, draft: "Plan short-form clips (hook, cut list, captions) from this source: " },
+      { label: "AI Pods", icon: Podcast, draft: "Write a two-host podcast episode script about: " },
+    ],
+  },
+  {
+    title: "Tools",
+    tiles: [
+      { label: "Deep Research", icon: Telescope, draft: "Deep research with cited primary sources, cross-checked: " },
+      { label: "Fact Check", icon: BadgeCheck, draft: "Fact-check this claim against at least two independent primary sources: " },
+      { label: "Web Scrape", icon: Globe, draft: "Scrape and summarize as a table: " },
+      { label: "AI Meeting Notes", icon: NotebookPen, draft: "Turn these meeting notes into minutes, decisions, and action items:\n\n" },
+      { label: "Realtime Translation", icon: Languages, draft: "Translate the following, keeping tone and formatting:\n\n" },
+      { label: "Inbox", icon: Inbox, draft: "Draft an email (subject + body, ready to send via Resend) to: " },
+      { label: "Custom Agent", icon: Bot, href: "/agents/manage" },
+    ],
+  },
+  {
+    title: "Build",
+    tiles: [
+      { label: "Code", icon: Code2, mode: "code", draft: "Build and verify: " },
+      { label: "Design / Prototype", icon: PenTool, draft: "Design a UI prototype (layout, components, copy) for: " },
+      { label: "Missions", icon: Rocket, href: "/missions" },
+    ],
+  },
+];
+
+function TileButton({ tile, onLaunch }: { tile: Tile; onLaunch: (t: Tile) => void }) {
+  const Icon = tile.icon;
+  return (
+    <button
+      onClick={() => onLaunch(tile)}
+      className="flex flex-col items-center gap-2.5 group"
+      aria-label={tile.label}
+    >
+      <div className="w-[72px] h-[72px] rounded-2xl bg-card border border-card-border flex items-center justify-center group-hover:border-primary/40 transition-colors">
+        <Icon className="w-8 h-8 text-foreground/80" />
+      </div>
+      <span className="text-[13px] font-semibold text-foreground/85 text-center leading-tight">{tile.label}</span>
+    </button>
+  );
+}
+
+export default function AgentsHub() {
+  const [, navigate] = useLocation();
+  const { data: agents = [] } = useListAgents();
+
+  const launch = (tile: Tile) => {
+    if (tile.href) {
+      navigate(tile.href);
+      return;
+    }
+    if (tile.draft) {
+      try { sessionStorage.setItem(GOAL_DRAFT_KEY, tile.draft); } catch { /* ignore */ }
+    }
+    setChatSetup({ mode: tile.mode ?? "chat", agentId: null });
+    navigate("/chat");
+  };
+
+  const launchAgent = (id: number) => {
+    setChatSetup({ mode: "chat", agentId: id });
+    navigate("/chat");
+  };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-background overflow-hidden relative">
-      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-primary/5 via-background to-background"></div>
-      
-      <div className="p-8 border-b border-card-border relative z-10 flex items-center gap-4">
-        <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center border border-primary/20">
-          <Terminal className="w-6 h-6 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Agents</h1>
-          <p className="text-sm text-muted-foreground mt-1">Your six AI agents and the tools each one can use.</p>
-        </div>
-      </div>
+    <div className="flex-1 flex flex-col h-full bg-background overflow-hidden">
+      {/* Top bar */}
+      <header className="h-16 shrink-0 flex items-center gap-2 px-3 sm:px-4">
+        <button
+          onClick={openAppDrawer}
+          aria-label="Open menu"
+          className="lg:hidden w-11 h-11 rounded-xl bg-card border border-card-border flex items-center justify-center"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <Link href="/chat">
+          <button aria-label="Back to chat" className="hidden lg:flex w-11 h-11 rounded-xl bg-card border border-card-border items-center justify-center">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        </Link>
+        <h1 className="flex-1 text-center text-lg font-black tracking-tight pr-11">All Agents</h1>
+      </header>
 
-      <div className="flex-1 overflow-y-auto p-8 relative z-10">
-        {isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="h-64 bg-card/50 rounded-xl border border-card-border animate-pulse"></div>
-            ))}
-          </div>
-        ) : isError ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-            <AlertTriangle className="w-8 h-8 text-destructive" />
-            <div className="text-sm text-muted-foreground">Couldn't load the agent roster.</div>
-            <button onClick={() => refetch()} className="flex items-center gap-2 px-4 py-1.5 rounded-lg border border-card-border text-sm text-foreground hover:border-primary/40 transition-all">
-              <RefreshCw className="w-4 h-4" /> Retry
-            </button>
-          </div>
-        ) : agents.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-            <Terminal className="w-8 h-8 text-muted-foreground/40" />
-            <div className="text-sm text-muted-foreground">No agents found.</div>
-            <div className="text-xs text-muted-foreground/60 max-w-sm">The swarm seeds six AURA agents on first run. If none appear, the server may still be starting up.</div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {agents.map(agent => (
-              <div key={agent.id} className="bg-card border border-border rounded-2xl overflow-hidden group hover:shadow-md hover:border-primary/30 transition-all duration-200">
-                {/* Colored top accent */}
-                <div className="h-1" style={{ backgroundColor: agent.color }} />
-
-                <div className="p-5">
-                  {/* Header row */}
-                  <div className="flex items-center gap-3.5 mb-4">
-                    <div
-                      className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
-                      style={{ backgroundColor: `${agent.color}18`, color: agent.color, border: `1.5px solid ${agent.color}40` }}
-                    >
-                      {agent.avatarInitials}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold text-[15px] leading-snug" style={{ color: agent.color }}>{agent.name}</h3>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <AgentStatusDot status={agent.status} />
-                        <span className="text-[11px] text-muted-foreground capitalize">{agent.status}</span>
-                      </div>
-                    </div>
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 pb-10">
+        <div className="max-w-2xl mx-auto space-y-8">
+          {/* Live swarm roster */}
+          <section>
+            <h2 className="text-[13px] font-bold tracking-[0.14em] text-muted-foreground uppercase mb-4">Your Swarm</h2>
+            <div className="grid grid-cols-4 gap-x-2 gap-y-6">
+              {agents.map((a) => (
+                <button key={a.id} onClick={() => launchAgent(a.id)} className="flex flex-col items-center gap-2.5 group" aria-label={`Chat with ${a.name}`}>
+                  <div
+                    className="w-[72px] h-[72px] rounded-2xl bg-card border border-card-border flex items-center justify-center text-xl font-black group-hover:border-primary/40 transition-colors"
+                    style={{ color: a.color }}
+                  >
+                    {a.name.replace("AURA-", "A").slice(0, 2).toUpperCase()}
                   </div>
+                  <span className="text-[13px] font-semibold text-foreground/85 text-center leading-tight">{a.name}</span>
+                </button>
+              ))}
+              <TileButton tile={{ label: "Manage Swarm", icon: Bot, href: "/agents/manage" }} onLaunch={launch} />
+            </div>
+          </section>
 
-                  {/* Role + description */}
-                  <div className="mb-4 space-y-2">
-                    <div className="text-sm font-medium text-foreground">{agent.role}</div>
-                    {agent.description && (
-                      <div className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{agent.description}</div>
-                    )}
-                  </div>
-
-                  {/* Context bar */}
-                  <div className="mb-4">
-                    <div className="flex justify-between text-[11px] text-muted-foreground mb-1.5">
-                      <span>Context</span>
-                      <span>{Math.round((agent.contextUsed / agent.contextMax) * 100)}%</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(100, (agent.contextUsed / agent.contextMax) * 100)}%`, backgroundColor: agent.color }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Model */}
-                  {agent.model && (
-                    <div className="mb-4 flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
-                      <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                      <span className="text-[11px] font-mono text-muted-foreground truncate">{agent.model}</span>
-                    </div>
-                  )}
-
-                  {/* Capabilities */}
-                  {agent.capabilities && agent.capabilities.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {agent.capabilities.slice(0, 6).map(cap => (
-                        <span key={cap} className="px-2 py-0.5 bg-muted text-muted-foreground text-[10px] rounded-full font-medium">
-                          {cap}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
+          {SECTIONS.map((s) => (
+            <section key={s.title}>
+              <h2 className="text-[13px] font-bold tracking-[0.14em] text-muted-foreground uppercase mb-4">{s.title}</h2>
+              <div className="grid grid-cols-4 gap-x-2 gap-y-6">
+                {s.tiles.map((t) => (
+                  <TileButton key={t.label} tile={t} onLaunch={launch} />
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   );

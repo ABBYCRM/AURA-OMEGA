@@ -10,7 +10,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { attachmentsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 const router = Router();
 
@@ -26,6 +26,61 @@ function kindFor(mime: string, filename: string): "image" | "text" | "other" {
   if (TEXT_MIME_RE.test(mime) || TEXT_EXT_RE.test(filename)) return "text";
   return "other";
 }
+
+// GET /api/uploads?kind=image — metadata list (never the bytes) for the
+// drawer's Files / Pictures tabs, newest first.
+router.get("/uploads", async (req, res) => {
+  const kind = typeof req.query["kind"] === "string" ? String(req.query["kind"]) : null;
+  try {
+    const rows = await db
+      .select({
+        id: attachmentsTable.id,
+        filename: attachmentsTable.filename,
+        mimeType: attachmentsTable.mimeType,
+        kind: attachmentsTable.kind,
+        sizeBytes: attachmentsTable.sizeBytes,
+        createdAt: attachmentsTable.createdAt,
+      })
+      .from(attachmentsTable)
+      .orderBy(desc(attachmentsTable.id))
+      .limit(200);
+    const items = rows
+      .filter((r) => (kind ? r.kind === kind : true))
+      .map((r) => ({
+        id: r.id,
+        name: r.filename,
+        mime: r.mimeType,
+        kind: r.kind,
+        size: r.sizeBytes,
+        createdAt: r.createdAt,
+        url: `/api/uploads/${r.id}`,
+      }));
+    res.json({ uploads: items, count: items.length });
+  } catch (err) {
+    req.log.error({ err }, "upload: failed to list attachments");
+    res.status(500).json({ error: "failed to list uploads" });
+  }
+});
+
+// DELETE /api/uploads/:id — remove an upload (drawer "Clear" / per-file delete).
+router.delete("/uploads/:id", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  try {
+    const rows = await db.delete(attachmentsTable).where(eq(attachmentsTable.id, id)).returning({ id: attachmentsTable.id });
+    if (rows.length === 0) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    res.json({ deleted: id });
+  } catch (err) {
+    req.log.error({ err }, "upload: failed to delete attachment");
+    res.status(500).json({ error: "failed to delete upload" });
+  }
+});
 
 // POST /api/uploads  { name, mime, dataBase64 }
 router.post("/uploads", async (req, res) => {

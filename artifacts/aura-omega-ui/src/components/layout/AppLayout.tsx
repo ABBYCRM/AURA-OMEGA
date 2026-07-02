@@ -1,26 +1,31 @@
 import { Link, useLocation } from "wouter";
 import {
-  Activity,
+  Asterisk,
+  Menu as MenuIcon,
   Bot,
-  BrainCircuit,
   CalendarClock,
+  Code2,
+  FolderClosed,
+  ImageIcon,
   KeyRound,
+  Link2,
   MessageSquare,
+  Moon,
   MoreHorizontal,
   Network,
+  Rocket,
+  ServerCog,
   Settings as SettingsIcon,
-  ShieldCheck,
+  Smartphone,
   StickyNote,
+  Boxes,
+  Sun,
   Workflow,
   X,
   Plus,
   Pencil,
   Trash2,
-  ServerCog,
-  Sparkles,
-  Boxes,
-  Smartphone,
-  Rocket,
+  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -32,21 +37,23 @@ import {
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useTheme } from "@/hooks/useTheme";
+import { IntegrationsPanel, FilesPanel, MyCodePanel } from "./DrawerPanels";
 
-// Manus-style navigation: chat threads live on the left rail, everything else
-// sits behind a single "More" drawer. No theatrical 12-link sidebar.
+// Every existing surface stays reachable — the Claw drawer's "More" tab hosts
+// the full navigation that used to live in the old More drawer.
 const moreNav = [
+  { href: "/agents",      icon: Bot,           label: "All Agents",    hint: "Swarm + capability launcher" },
   { href: "/scratchpad",  icon: StickyNote,    label: "Scratchpad",    hint: "Pinned context — ABBY reads this always" },
   { href: "/hermes",      icon: Boxes,         label: "Hermes",        hint: "Runtime · skills · heartbeat" },
   { href: "/remote",      icon: Smartphone,    label: "Remote Control",hint: "BOS-OMEGA devices" },
   { href: "/missions",    icon: Rocket,        label: "Missions",      hint: "Durable mission kernel" },
-  { href: "/agents",      icon: Bot,           label: "Agents",        hint: "ABBY + AURAs" },
   { href: "/tasks",       icon: Network,       label: "Tasks",         hint: "Task queue" },
   { href: "/tools",       icon: Workflow,      label: "Tools",         hint: "Tool matrix" },
   { href: "/cron",        icon: CalendarClock, label: "Cron",          hint: "Scheduled jobs" },
   { href: "/runtimes",    icon: ServerCog,     label: "Runtimes",      hint: "LLM providers" },
-  { href: "/integrations",icon: KeyRound,      label: "Integrations",  hint: "Composio · Firecrawl · Steel" },
-  { href: "/settings",    icon: SettingsIcon,  label: "Settings",      hint: "Operator controls" },
+  { href: "/integrations",icon: KeyRound,      label: "Integrations",  hint: "Full console" },
+  { href: "/settings",    icon: SettingsIcon,  label: "Settings",      hint: "Operator controls · Stored Secrets" },
 ];
 
 function isActive(location: string, href: string) {
@@ -54,80 +61,22 @@ function isActive(location: string, href: string) {
   return location === href || location.startsWith(`${href}/`);
 }
 
-function MoreDrawer({
-  open,
-  onClose,
-  location,
-}: {
-  open: boolean;
-  onClose: () => void;
-  location: string;
-}) {
-  if (!open) return null;
-  return (
-    <>
-      <div
-        className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        className={cn(
-          "fixed top-0 left-0 bottom-0 z-50 bg-card border-r border-border",
-          "flex flex-col w-[88%] max-w-[360px] sm:w-72",
-        )}
-        role="dialog"
-        aria-label="More navigation"
-      >
-        <div className="flex items-center justify-between px-4 py-4 border-b border-border shrink-0">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold">More</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="min-h-[44px] min-w-[44px] -mr-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-2" aria-label="More navigation">
-          {moreNav.map((item) => {
-            const active = isActive(location, item.href);
-            const Icon = item.icon;
-            return (
-              <Link key={item.href} href={item.href}>
-                <div
-                  onClick={onClose}
-                  className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 min-h-[44px] cursor-pointer transition-colors",
-                    active
-                      ? "bg-primary/12 text-primary"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                >
-                  <Icon
-                    className="w-[18px] h-[18px] shrink-0"
-                    strokeWidth={active ? 2.2 : 1.75}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className={cn("text-sm leading-none", active && "font-semibold")}>
-                      {item.label}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground/70 leading-none mt-1 truncate">
-                      {item.hint}
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-        </nav>
-      </div>
-    </>
-  );
+/** The chat header hamburger opens the drawer from anywhere via this event. */
+export const OPEN_DRAWER_EVENT = "aura:open-drawer";
+export function openAppDrawer() {
+  window.dispatchEvent(new CustomEvent(OPEN_DRAWER_EVENT));
 }
+
+type DrawerTab = "chats" | "integrations" | "files" | "pictures" | "code" | "more";
+
+const DRAWER_TABS: Array<{ id: DrawerTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { id: "chats",        label: "Chats",        icon: MessageSquare },
+  { id: "integrations", label: "Integrations", icon: Link2 },
+  { id: "files",        label: "Files",        icon: FolderClosed },
+  { id: "pictures",     label: "Pictures",     icon: ImageIcon },
+  { id: "code",         label: "My Code",      icon: Code2 },
+  { id: "more",         label: "More",         icon: MoreHorizontal },
+];
 
 function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
   const qc = useQueryClient();
@@ -180,7 +129,6 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       qc.invalidateQueries({ queryKey: getListChannelsQueryKey() });
-      // If we deleted the active one, route to /
       navigate("/chat");
     } catch (err) {
       toast.error("Couldn't delete mission");
@@ -201,29 +149,45 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
     }
   };
 
+  // ⌘K / Ctrl+K — new chat, like the reference design's kbd hint.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        handleNewChat();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="flex flex-col h-full">
       <button
         onClick={handleNewChat}
         disabled={createChannel.isPending}
         className={cn(
-          "mx-2 mt-2 mb-3 flex items-center justify-center gap-2 rounded-xl px-3 min-h-[44px]",
-          "bg-primary/12 text-primary border border-primary/20",
-          "hover:bg-primary/20 active:bg-primary/25 transition-colors text-sm font-medium",
+          "mx-2 mt-1 mb-3 flex items-center gap-2 rounded-2xl px-4 min-h-[52px]",
+          "bg-card border border-card-border text-foreground",
+          "hover:border-primary/40 transition-colors text-sm font-bold",
           "disabled:opacity-50",
         )}
         data-testid="new-chat-button"
       >
         <Plus className="w-4 h-4" />
-        New mission
+        New chat
+        <kbd className="ml-auto rounded-lg bg-muted px-2 py-1 text-[11px] font-semibold text-muted-foreground">⌘K</kbd>
       </button>
 
-      <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
+      <div className="px-4 pb-1 text-[11px] font-bold tracking-[0.12em] text-muted-foreground/70 select-none">RECENT</div>
+
+      <div className="flex-1 overflow-y-auto px-2 space-y-1">
         {isLoading && channels.length === 0 ? (
           <div className="text-[11px] text-muted-foreground/60 px-3 py-2">Loading…</div>
         ) : channels.length === 0 ? (
           <div className="text-[11px] text-muted-foreground/60 px-3 py-2">
-            No missions yet.
+            No chats yet.
           </div>
         ) : (
           channels.map((c) => {
@@ -232,8 +196,8 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
               <div
                 key={c.id}
                 className={cn(
-                  "group flex items-center gap-1 rounded-xl px-2 min-h-[44px] cursor-pointer transition-colors",
-                  "hover:bg-muted active:bg-muted/70 text-foreground/85",
+                  "group flex items-center gap-2 rounded-2xl px-3 min-h-[48px] cursor-pointer transition-colors",
+                  "bg-card/60 border border-transparent hover:bg-card hover:border-card-border text-foreground/90",
                 )}
                 onClick={() => {
                   if (!isEditing) {
@@ -242,7 +206,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
                   }
                 }}
               >
-                <MessageSquare className="w-3.5 h-3.5 shrink-0 text-muted-foreground/60" />
+                <Star className="w-4 h-4 shrink-0 text-muted-foreground/50" />
                 {isEditing ? (
                   <input
                     autoFocus
@@ -257,7 +221,7 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
                     className="flex-1 bg-transparent text-sm border-b border-primary outline-none"
                   />
                 ) : (
-                  <span className="flex-1 text-sm truncate">{c.name}</span>
+                  <span className="flex-1 text-sm font-semibold truncate">{c.name}</span>
                 )}
                 {!isEditing && (
                   <div className="opacity-0 group-hover:opacity-100 sm:group-focus-within:opacity-100 flex items-center gap-0.5 transition-opacity">
@@ -292,11 +256,123 @@ function ChatThreadList({ onItemClick }: { onItemClick?: () => void }) {
   );
 }
 
+function MorePanel({ location, onNavigate }: { location: string; onNavigate?: () => void }) {
+  return (
+    <nav className="flex-1 overflow-y-auto px-2 pb-2 space-y-1" aria-label="More navigation">
+      {moreNav.map((item) => {
+        const active = isActive(location, item.href);
+        const Icon = item.icon;
+        return (
+          <Link key={item.href} href={item.href}>
+            <div
+              onClick={onNavigate}
+              className={cn(
+                "flex items-center gap-3 rounded-2xl px-3 min-h-[48px] cursor-pointer transition-colors border",
+                active
+                  ? "bg-primary/12 text-primary border-primary/25"
+                  : "bg-card/60 border-transparent text-muted-foreground hover:bg-card hover:border-card-border hover:text-foreground",
+              )}
+            >
+              <Icon className="w-[18px] h-[18px] shrink-0" strokeWidth={active ? 2.2 : 1.75} />
+              <div className="flex-1 min-w-0">
+                <div className={cn("text-sm leading-none font-semibold")}>{item.label}</div>
+                <div className="text-[11px] text-muted-foreground/70 leading-none mt-1 truncate">{item.hint}</div>
+              </div>
+            </div>
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** The Claw-style drawer: logo header, tab pills, tab panel, Ready/theme footer. */
+function DrawerContent({ heartbeat, onClose }: { heartbeat: "online" | "offline" | "unknown"; onClose?: () => void }) {
+  const [tab, setTab] = useState<DrawerTab>("chats");
+  const [location] = useLocation();
+  const { theme, toggle } = useTheme();
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Logo header */}
+      <Link href="/chat">
+        <div onClick={onClose} className="flex items-center gap-3 px-4 pt-4 pb-3 cursor-pointer select-none">
+          <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center shrink-0 shadow-sm">
+            <Asterisk className="w-6 h-6 text-primary-foreground" strokeWidth={2.5} />
+          </div>
+          <div className="text-xl font-black tracking-tight">AURA-OMEGA</div>
+          {onClose && (
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+              className="ml-auto min-h-[40px] min-w-[40px] rounded-xl text-muted-foreground hover:text-foreground flex items-center justify-center"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
+        </div>
+      </Link>
+
+      {/* Tab pills */}
+      <div className="flex flex-wrap gap-2 px-3 pb-3">
+        {DRAWER_TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={cn(
+                "flex items-center gap-2 rounded-2xl px-4 min-h-[44px] text-sm font-bold transition-colors border",
+                active
+                  ? "bg-secondary text-foreground border-card-border"
+                  : "bg-card text-muted-foreground border-card-border hover:text-foreground",
+              )}
+            >
+              <Icon className="w-4 h-4" />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Active panel */}
+      {tab === "chats" && <ChatThreadList onItemClick={onClose} />}
+      {tab === "integrations" && <IntegrationsPanel onNavigate={onClose} />}
+      {tab === "files" && <FilesPanel picturesOnly={false} />}
+      {tab === "pictures" && <FilesPanel picturesOnly={true} />}
+      {tab === "code" && <MyCodePanel onNavigate={onClose} />}
+      {tab === "more" && <MorePanel location={location} onNavigate={onClose} />}
+
+      {/* Footer: Ready + theme toggle */}
+      <div className="shrink-0 border-t border-border px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <span className={cn(
+            "w-3 h-3 rounded-full",
+            heartbeat === "online" ? "bg-emerald-500" : heartbeat === "offline" ? "bg-destructive" : "bg-muted-foreground",
+          )} />
+          {heartbeat === "online" ? "Ready" : heartbeat === "offline" ? "Offline" : "Checking…"}
+        </div>
+        <button
+          onClick={toggle}
+          className="flex items-center gap-2 rounded-2xl bg-card border border-card-border px-4 min-h-[44px] text-sm font-bold"
+          aria-label="Toggle theme"
+        >
+          {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          {theme === "dark" ? "Light" : "Dark"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AppLayout({ children }: { children: React.ReactNode }) {
-  const [location, navigate] = useLocation();
   const [heartbeat, setHeartbeat] = useState<"online" | "offline" | "unknown">("unknown");
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [location] = useLocation();
+  // The chat page renders its own hamburger in the Claw top bar; every other
+  // page gets a floating one on mobile so the drawer stays reachable.
+  const pageHasOwnHamburger = location === "/" || location.startsWith("/chat");
 
   useEffect(() => {
     let alive = true;
@@ -313,54 +389,19 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return () => { alive = false; window.clearInterval(id); };
   }, []);
 
+  // The chat header hamburger (and anything else) opens the drawer via event.
+  useEffect(() => {
+    const open = () => setDrawerOpen(true);
+    window.addEventListener(OPEN_DRAWER_EVENT, open);
+    return () => window.removeEventListener(OPEN_DRAWER_EVENT, open);
+  }, []);
+
   return (
-    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans flex-col md:flex-row">
+    <div className="flex h-screen w-full bg-background text-foreground overflow-hidden font-sans">
 
-      {/* ── Desktop sidebar — chat threads only (Manus-style) ───────────── */}
-      <aside className="hidden md:flex w-60 flex-shrink-0 border-r border-border bg-card flex-col">
-        {/* Logo */}
-        <Link href="/chat" data-testid="link-aura-logo">
-          <div className="flex items-center gap-3 px-4 py-4 cursor-pointer group select-none border-b border-border">
-            <div className="relative w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25 shrink-0">
-              <BrainCircuit className="w-4 h-4 text-primary" />
-              <span className={cn(
-                "absolute -right-0.5 -top-0.5 w-2 h-2 rounded-full border-2 border-card",
-                heartbeat === "online"  ? "bg-emerald-400 animate-pulse" :
-                heartbeat === "offline" ? "bg-destructive" :
-                                          "bg-muted-foreground",
-              )} />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-black tracking-tight">AURA-OMEGA</div>
-              <div className="text-[10px] text-muted-foreground font-medium">Hermes runtime</div>
-            </div>
-          </div>
-        </Link>
-
-        <ChatThreadList />
-
-        {/* Bottom: More button + status */}
-        <div className="border-t border-border p-2 space-y-1">
-          <button
-            onClick={() => setMoreOpen(true)}
-            className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-            data-testid="more-button"
-          >
-            <MoreHorizontal className="w-4 h-4" />
-            More
-          </button>
-          <div className={cn(
-            "flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px]",
-            heartbeat === "online"
-              ? "border-emerald-500/25 bg-emerald-500/8 text-emerald-600 dark:text-emerald-400"
-              : "border-border bg-muted/40 text-muted-foreground",
-          )}>
-            <ShieldCheck className="w-3 h-3 shrink-0" />
-            <span className="font-medium truncate">
-              {heartbeat === "online" ? "Online" : heartbeat === "offline" ? "Offline" : "Checking…"}
-            </span>
-          </div>
-        </div>
+      {/* ── Desktop sidebar — the Claw drawer, always visible ─────────────── */}
+      <aside className="hidden lg:flex w-[340px] flex-shrink-0 border-r border-border bg-background flex-col">
+        <DrawerContent heartbeat={heartbeat} />
       </aside>
 
       {/* ── Main content ────────────────────────────────────────────────── */}
@@ -368,78 +409,31 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         {children}
       </main>
 
-      {/* ── More drawer (desktop + mobile) ──────────────────────────────── */}
-      <MoreDrawer open={moreOpen} onClose={() => setMoreOpen(false)} location={location} />
+      {/* ── Mobile: floating drawer opener on pages without their own ────── */}
+      {!pageHasOwnHamburger && !drawerOpen && (
+        <button
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open menu"
+          className="lg:hidden fixed bottom-4 left-4 z-30 w-12 h-12 rounded-2xl bg-primary text-primary-foreground shadow-lg flex items-center justify-center"
+        >
+          <MenuIcon className="w-5 h-5" />
+        </button>
+      )}
 
-      {/* ── Mobile: thread drawer ───────────────────────────────────────── */}
-      {mobileDrawerOpen && (
+      {/* ── Mobile/tablet: slide-in drawer ─────────────────────────────────── */}
+      {drawerOpen && (
         <div
-          className="md:hidden fixed inset-0 bg-black/40 z-40 backdrop-blur-sm"
-          onClick={() => setMobileDrawerOpen(false)}
+          className="lg:hidden fixed inset-0 bg-black/40 z-40 backdrop-blur-sm"
+          onClick={() => setDrawerOpen(false)}
         />
       )}
       <div className={cn(
-        "md:hidden fixed top-0 left-0 bottom-0 z-50 bg-card border-r border-border",
-        "flex flex-col transition-transform duration-200 w-[88%] max-w-[360px]",
-        mobileDrawerOpen ? "translate-x-0" : "-translate-x-full",
+        "lg:hidden fixed top-0 left-0 bottom-0 z-50 bg-background border-r border-border",
+        "flex flex-col transition-transform duration-200 w-[86%] max-w-[400px]",
+        drawerOpen ? "translate-x-0" : "-translate-x-full",
       )}>
-        <Link href="/chat" data-testid="link-aura-logo-mobile">
-          <div
-            onClick={() => setMobileDrawerOpen(false)}
-            className="flex items-center gap-3 px-4 py-4 cursor-pointer border-b border-border min-h-[60px]"
-          >
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/25 shrink-0">
-              <BrainCircuit className="w-4 h-4 text-primary" />
-            </div>
-            <div className="leading-tight">
-              <div className="text-sm font-black tracking-tight">AURA-OMEGA</div>
-              <div className="text-[10px] text-muted-foreground font-medium">Hermes runtime</div>
-            </div>
-          </div>
-        </Link>
-        <ChatThreadList onItemClick={() => setMobileDrawerOpen(false)} />
+        <DrawerContent heartbeat={heartbeat} onClose={() => setDrawerOpen(false)} />
       </div>
-
-      {/* ── Mobile bottom nav ───────────────────────────────────────────── */}
-      <nav
-        className="md:hidden w-full flex-shrink-0 flex items-stretch border-t border-border bg-card z-20"
-        aria-label="Mobile navigation"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-      >
-        <button
-          onClick={() => setMobileDrawerOpen(true)}
-          className={cn(
-            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
-            mobileDrawerOpen ? "text-primary" : "text-muted-foreground",
-          )}
-          aria-label="Open missions"
-        >
-          <MessageSquare className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">Missions</span>
-        </button>
-        <button
-          onClick={() => navigate("/hermes")}
-          className={cn(
-            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
-            isActive(location, "/hermes") ? "text-primary" : "text-muted-foreground",
-          )}
-          aria-label="Hermes"
-        >
-          <Boxes className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">Hermes</span>
-        </button>
-        <button
-          onClick={() => setMoreOpen(true)}
-          className={cn(
-            "flex-1 flex flex-col items-center justify-center gap-1 min-h-[56px] py-2 transition-colors",
-            moreOpen ? "text-primary" : "text-muted-foreground",
-          )}
-          aria-label="More"
-        >
-          <MoreHorizontal className="w-5 h-5" />
-          <span className="text-[10px] font-semibold leading-none">More</span>
-        </button>
-      </nav>
     </div>
   );
 }
