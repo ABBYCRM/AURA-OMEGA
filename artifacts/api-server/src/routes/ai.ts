@@ -885,7 +885,15 @@ router.post("/ai/chat", async (req, res) => {
       } catch { /* fall through to error handling below */ }
     }
     if (!orRes) {
-      sendEvent({ error: "LLM temporarily unavailable (all providers rate-limited). Try again in a moment." });
+      // Distinguish "no key configured" from real rate-limiting — telling the
+      // operator to "try again in a moment" when there is NO provider key is a
+      // misdiagnosis that hides the actual fix.
+      const anyProvider = nvidiaConfigured() || kimiApiConfigured() || cfWorkersConfigured();
+      sendEvent({
+        error: anyProvider
+          ? "LLM temporarily unavailable (all providers rate-limited). Try again in a moment."
+          : "No LLM provider is configured — add NVIDIA_API_KEY (or KIMI_API_KEY) in Settings → Stored Secrets to enable chat.",
+      });
       sendEvent({ done: true });
       res.end(); return;
     }

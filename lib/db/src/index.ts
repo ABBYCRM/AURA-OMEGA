@@ -51,6 +51,17 @@ export const pool = new Pool({
   connectionTimeoutMillis: 10_000,
   ssl: sslFor(process.env.DATABASE_URL),
 });
+
+// REQUIRED: an idle pooled client that loses its connection (DB restart,
+// failover, "terminating connection due to administrator command") emits
+// 'error' on the pool. With no listener, Node treats it as an unhandled
+// 'error' event and CRASHES the whole server — turning any DB blip into a
+// full outage / crash-loop. Log and carry on; the pool replaces dead
+// clients lazily on the next query.
+pool.on("error", (err) => {
+  // eslint-disable-next-line no-console
+  console.error("[db] idle client error (pool will recover on next query):", err.message);
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

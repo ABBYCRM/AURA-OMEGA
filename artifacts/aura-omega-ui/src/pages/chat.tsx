@@ -317,9 +317,24 @@ export default function ChatPage() {
     }
   };
 
-  const send = () => {
+  // The composer is never disabled: if there's no active chat yet (fresh
+  // install, or the channel list failed to load), sending creates one first.
+  const ensureChannel = async (): Promise<number | null> => {
+    if (activeId != null) return activeId;
+    try {
+      const result = await createChannel.mutateAsync({ data: { name: "New mission", type: "general" } });
+      return (result as { id?: number })?.id ?? null;
+    } catch {
+      toast.error("Couldn't start a chat — the server can't reach its database.");
+      return null;
+    }
+  };
+
+  const send = async () => {
     const body = text.trim();
-    if ((!body && !attachment) || activeId == null || ai.streaming) return;
+    if ((!body && !attachment) || ai.streaming) return;
+    const channelId = await ensureChannel();
+    if (channelId == null) return;
     const att = attachment;
     // What gets persisted/shown in the feed: images render inline via markdown,
     // other files show as a labelled link.
@@ -335,16 +350,16 @@ export default function ChatPage() {
     setAttachment(null);
     requestAnimationFrame(autoGrow);
     sendMessage.mutate(
-      { data: { content: composed, messageType: "user" }, channelId: activeId },
+      { data: { content: composed, messageType: "user" }, channelId },
       {
         onSuccess: () => {
-          qc.invalidateQueries({ queryKey: getListMessagesQueryKey(activeId) });
+          qc.invalidateQueries({ queryKey: getListMessagesQueryKey(channelId) });
           // The model gets the original text plus the mode directive and the
           // attachment id (vision/text). The persisted message stays clean.
           ai.send({
             message: (body || "(see attached file)") + MODE_DIRECTIVE[mode],
             agentId: agentSel,
-            channelId: activeId,
+            channelId,
             attachmentIds: att ? [att.id] : undefined,
           });
         },
@@ -629,7 +644,6 @@ export default function ChatPage() {
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={onKey}
                 rows={1}
-                disabled={activeId == null}
                 aria-label="Message"
                 placeholder={ai.streaming ? "Waiting for AURA-OMEGA response…" : MODE_PLACEHOLDER[mode]}
                 className="w-full resize-none bg-transparent py-2 text-[15px] leading-relaxed focus:outline-none placeholder:text-muted-foreground/60 max-h-[200px]"
@@ -640,7 +654,7 @@ export default function ChatPage() {
                 <input ref={fileRef} type="file" className="hidden" onChange={onPickFile} aria-hidden="true" />
                 <button
                   onClick={() => fileRef.current?.click()}
-                  disabled={activeId == null || uploading}
+                  disabled={uploading}
                   aria-label="Attach a file"
                   className="w-10 h-10 rounded-xl bg-muted border border-card-border flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors shrink-0"
                 >
@@ -648,7 +662,6 @@ export default function ChatPage() {
                 </button>
                 <button
                   onClick={toggleVoice}
-                  disabled={activeId == null}
                   aria-label={listening ? "Stop voice input" : "Speak your message"}
                   title={listening ? "Listening… click to stop" : "Speak your message"}
                   className={cn(
@@ -664,7 +677,7 @@ export default function ChatPage() {
                 <div className="flex-1" />
                 <button
                   onClick={launchAsMission}
-                  disabled={!text.trim() || activeId == null || ai.streaming || uploading}
+                  disabled={!text.trim() || ai.streaming || uploading}
                   aria-label="Launch as mission"
                   title="Send this goal to the Mission Kernel (event-driven execution loop). Tracks progress, retries, and final state on /missions."
                   className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 flex items-center justify-center hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
@@ -673,7 +686,7 @@ export default function ChatPage() {
                 </button>
                 <button
                   onClick={send}
-                  disabled={(!text.trim() && !attachment) || activeId == null || ai.streaming || uploading}
+                  disabled={(!text.trim() && !attachment) || ai.streaming || uploading}
                   aria-label="Send message"
                   className="w-11 h-11 rounded-xl bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-all shrink-0"
                 >
