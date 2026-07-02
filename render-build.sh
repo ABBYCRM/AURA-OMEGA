@@ -45,7 +45,11 @@ echo "=== Building lib packages ==="
 npx --yes pnpm@9 run typecheck:libs
 
 echo "=== Pushing DB schema ==="
-npx --yes pnpm@9 --filter @workspace/db run push || echo "WARNING: DB push failed, continuing anyway"
+echo "DATABASE_URL is set: $([ -n "$DATABASE_URL" ] && echo 'YES' || echo 'NO')"
+echo "DATABASE_URL prefix: ${DATABASE_URL%%:*}"
+cd lib/db && npx drizzle-kit push --force 2>&1
+echo "DB push exit code: $?"
+cd ../..
 
 echo "=== Building API server ==="
 npx --yes pnpm@9 --filter @workspace/api-server run build
