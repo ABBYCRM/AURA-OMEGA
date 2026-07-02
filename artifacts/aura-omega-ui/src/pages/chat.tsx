@@ -354,13 +354,16 @@ export default function ChatPage() {
       {
         onSuccess: () => {
           qc.invalidateQueries({ queryKey: getListMessagesQueryKey(channelId) });
-          // The model gets the original text plus the mode directive and the
-          // attachment id (vision/text). The persisted message stays clean.
+          // Image/Video run deterministically server-side (the server calls the
+          // generation tool directly), so send the CLEAN prompt + mode. Other
+          // modes append a text directive for the LLM/dispatch path.
+          const isDirectGen = mode === "image" || mode === "video";
           ai.send({
-            message: (body || "(see attached file)") + MODE_DIRECTIVE[mode],
+            message: (body || "(see attached file)") + (isDirectGen ? "" : MODE_DIRECTIVE[mode]),
             agentId: agentSel,
             channelId,
             attachmentIds: att ? [att.id] : undefined,
+            mode,
           });
         },
         onError: () => toast.error("Couldn't send your message. Try again."),

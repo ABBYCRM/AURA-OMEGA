@@ -28,6 +28,7 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
     channelId: number;
     model?: string;
     attachmentIds?: number[];
+    mode?: string;
   }): Promise<{ text: string; error: string | null; agentName: string | null }> => {
     // Cancel any in-flight stream
     abortRef.current?.abort();
@@ -54,6 +55,7 @@ export function useAiStream(onComplete?: (agentId: number | null) => void) {
           channelId: opts.channelId,
           model: opts.model,
           attachmentIds: opts.attachmentIds?.length ? opts.attachmentIds : undefined,
+          mode: opts.mode,
         }),
       });
 

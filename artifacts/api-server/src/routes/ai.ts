@@ -6,7 +6,7 @@ import { llmBaseUrl, llmFetchUrl, llmRouteUrl, llmHeaders, heliconeHeaders, nvid
 import { extractAndStoreUserFacts, getUserProfile } from "../lib/userMemory";
 import { getScratchpad } from "./scratchpad";
 import { listSecretNames } from "../lib/vault";
-import { buildCapabilityCard, getToolNamesForAgent } from "../tools";
+import { buildCapabilityCard, getToolNamesForAgent, runTool } from "../tools";
 import { orchestrateGoal } from "../orchestrator";
 import { buildMissionSteps } from "../lib/mission/planner";
 import { postSwarmDispatch, planDimensions } from "../lib/mission/swarm-dispatch";
@@ -372,7 +372,7 @@ router.get("/ai/models", async (req, res) => {
 // SSE streaming AI chat — POST /api/ai/chat
 // Body: { message: string, agentId: number, channelId: number, model?: string }
 router.post("/ai/chat", async (req, res) => {
-  const { message, agentId, channelId, model: overrideModel, attachmentIds } = req.body ?? {};
+  const { message, agentId, channelId, model: overrideModel, attachmentIds, mode } = req.body ?? {};
 
   if (!message || typeof message !== "string" || !message.trim()) {
     res.status(400).json({ error: "message is required" }); return;
@@ -536,6 +536,37 @@ router.post("/ai/chat", async (req, res) => {
     sendEvent({ done: true, agentId: agent.id, agentName: agent.name, model: usedModel });
     res.end();
   };
+
+  // ── Deterministic Image / Video generation ──────────────────────────────
+  // When the operator picks the Image or Video composer mode, run the
+  // generation tool DIRECTLY server-side and stream the real result. The LLM
+  // router is bypassed entirely: left to the model, it fabricates a
+  // plausible-looking image/video URL (e.g. a fake S3 link) instead of calling
+  // the tool. This guarantees a real, downloadable asset or an honest error.
+  if (mode === "image" || mode === "video") {
+    const toolName = mode === "image" ? "image_generate" : "video_generate";
+    const ack = mode === "image"
+      ? "**Generating your image…**\n\n"
+      : "**Generating your video…** this renders a real MP4 and can take a few minutes.\n\n";
+    sendEvent({ token: ack });
+    fullResponse += ack;
+    try {
+      const result = await runTool(toolName, { prompt: message.trim() }, {
+        agentId: agent.id,
+        agentName: agent.name,
+        agentColor: agent.color,
+        channelId,
+      });
+      sendEvent({ token: result });
+      fullResponse += result;
+    } catch (e) {
+      const errText = `\n\nerror: ${mode} generation failed: ${String(e instanceof Error ? e.message : e).slice(0, 200)}`;
+      sendEvent({ token: errText });
+      fullResponse += errText;
+    }
+    await finishWith(fullResponse, model, `direct-${mode}`);
+    return;
+  }
 
   // Dispatch context: the current request PLUS the recent transcript, so the
   // AURAs can resolve cross-turn references ("that file", "the brief", "make it a
