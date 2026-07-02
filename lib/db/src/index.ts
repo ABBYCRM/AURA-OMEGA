@@ -25,17 +25,31 @@ if (!process.env.DATABASE_URL) {
 // starve and hang past the client timeout — surfacing as empty/dropped
 // responses. Give it real headroom and a connection-acquire timeout so a busy
 // moment fails fast with an error the caller can retry, instead of hanging.
+// SSL must match the host, not be forced globally:
+//  - Render INTERNAL Postgres (host like "dpg-xxxx-a", no dots) speaks
+//    plaintext — forcing TLS makes the server close the socket, which
+//    surfaces as "Connection terminated unexpectedly" on the first query.
+//  - Render EXTERNAL hosts (…render.com) require TLS but present a
+//    self-signed chain, so accept it with rejectUnauthorized: false.
+//  - localhost/127.x never uses TLS.
+function sslFor(connectionString: string | undefined): { rejectUnauthorized: false } | undefined {
+  if (!connectionString) return undefined;
+  try {
+    const host = new URL(connectionString).hostname;
+    if (host === "localhost" || host.startsWith("127.")) return undefined;
+    if (!host.includes(".")) return undefined; // Render internal hostname
+    return { rejectUnauthorized: false };
+  } catch {
+    return undefined;
+  }
+}
+
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: Number(process.env.PG_POOL_MAX ?? 20),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,
-  // Operator 2026-06-30: Render's external Postgres uses a self-signed cert
-  // that node-postgres strict-mode rejects ("Connection terminated unexpectedly"
-  // on the very first query). Accept the cert but verify the chain — never
-  // true without rejectUnauthorized:false on a remote DB; never false on a
-  // localhost DB. We're on Render, so accept.
-  ssl: { rejectUnauthorized: false },
+  ssl: sslFor(process.env.DATABASE_URL),
 });
 export const db = drizzle(pool, { schema });
 
